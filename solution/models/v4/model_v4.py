@@ -14,11 +14,13 @@ DESTINATION_ACTION = 0
 LOAD_UNLOAD_ACTION = 1
 NOOP_ACTION = 2
 
+
 def count_parameters(model):
     param_count = (sum(p.numel() for p in model.parameters()), {})
     for new_name, module in model.named_children():
         param_count[1][new_name] = count_parameters(module)
     return param_count
+
 
 def get_config():
     return {
@@ -98,7 +100,6 @@ class Encoder(nn.Module):
             'non_linearity': self.non_linearity
         })
 
-
     def forward(self, x):
         """
         Args:
@@ -134,9 +135,10 @@ class Encoder(nn.Module):
         cargo_embeddings = self.up_projection_cargo(cargo_embeddings)
 
         # Self-attention layers
-        plane_embeddings = self.MHA_planes(plane_embeddings, plane_embeddings, plane_embeddings)
-        cargo_embeddings = self.MHA_cargo(cargo_embeddings, cargo_embeddings, cargo_embeddings)
-
+        plane_embeddings = self.MHA_planes(
+            plane_embeddings, plane_embeddings, plane_embeddings)
+        cargo_embeddings = self.MHA_cargo(
+            cargo_embeddings, cargo_embeddings, cargo_embeddings)
 
         return {
             'cargo_embeddings': cargo_embeddings,
@@ -276,12 +278,12 @@ class ValueHead(nn.Module):
             self.non_linearity,
             nn.Linear(self.output_head_hidden_dim, 1)
         )
-    
+
     def forward(self, n, p, c):
         """
         Args:
             n, p, c: embeddings for nodes, planes, and cargo
-    
+
         Returns: {
             plane_value: tensor (p x 1) state value for planes
             cargo_value: tensor (c x 1) state value for cargo
@@ -334,7 +336,7 @@ class Value(nn.Module):
         super(Value, self).__init__()
         self.encoder = Encoder()
         self.head = ValueHead()
-    
+
     def forward(self, x):
         """
         Args:
@@ -369,7 +371,7 @@ class PolicyHead(nn.Module):
         self.action_head = ActionHead()
         self.destination_head = DestinationHead()
         self.cargo_head = CargoHead()
-    
+
     def sample(self, logits, mask=None):
         """
         Args:
@@ -389,19 +391,21 @@ class PolicyHead(nn.Module):
         if mask is not None:
             logits = logits + mask
         return F.gumbel_softmax(logits, tau=1.0, hard=True, dim=-1).detach()
-    
+
     def update_masks(self, actions, destination_mask, cargo_mask):
-        
+
         cargo_mask = cargo_mask.T
         for plane, action in enumerate(actions):
             action_id = action.argmax().item()
             if action_id != DESTINATION_ACTION:
-                destination_mask[plane] = torch.tensor([-float('inf')]*destination_mask.shape[1])
+                destination_mask[plane] = torch.tensor(
+                    [-float('inf')]*destination_mask.shape[1])
             if action_id != LOAD_UNLOAD_ACTION:
-                cargo_mask[plane] = torch.tensor([-float('inf')]*cargo_mask.shape[1])
+                cargo_mask[plane] = torch.tensor(
+                    [-float('inf')]*cargo_mask.shape[1])
 
         return destination_mask, cargo_mask.T
-    
+
     def forward(self, n, p, c, action_mask=None, destination_mask=None, cargo_mask=None):
         """
         Args:
@@ -409,27 +413,31 @@ class PolicyHead(nn.Module):
             action_mask: additive mask for action head
             destination_mask: additive mask for destination head
             cargo_mask: additive mask for cargo head
-        
-            
+
+
         """
 
         # Select Actions
         r1 = self.R1(n=n, p=p, c=c)
-        action_logits = self.action_head(p=r1['p'], a=r1['a'], mask=action_mask)
+        action_logits = self.action_head(
+            p=r1['p'], a=r1['a'], mask=action_mask)
         actions = self.sample(action_logits)
 
         # Update masks with the selected actions
-        destination_mask, cargo_mask = self.update_masks(actions, destination_mask, cargo_mask)
+        destination_mask, cargo_mask = self.update_masks(
+            actions, destination_mask, cargo_mask)
 
         # Select Destinations
         r2 = self.R2(n=n, p=p, c=p, a_prev=r1['a'], y_a=actions)
-        destination_logits = self.destination_head(p=r2['p'], n=r2['n'], ap=r2['ap'], an=r2['an'], mask=destination_mask)
+        destination_logits = self.destination_head(
+            p=r2['p'], n=r2['n'], ap=r2['ap'], an=r2['an'], mask=destination_mask)
         destinations = self.sample(destination_logits)
 
         # Select Cargo
         r2a = torch.concat((r2['ap'], r2['an']), dim=1)
         r3 = self.R3(n=n, p=p, c=c, a_prev=r2a, y_a=actions, y_d=destinations)
-        cargo_logits = self.cargo_head(c=r3['c'], p=r3['p'], ac=r3['ac'], ap=r3['ac'], mask=cargo_mask)
+        cargo_logits = self.cargo_head(
+            c=r3['c'], p=r3['p'], ac=r3['ac'], ap=r3['ac'], mask=cargo_mask)
         cargo = self.sample(cargo_logits)
 
         return {
@@ -491,7 +499,7 @@ class ActionHead(nn.Module):
             self.non_linearity,
             nn.Linear(self.plane_dim*2, 3)
         )
-    
+
     def forward(self, p, a, mask=None):
         """
         Args:
@@ -527,7 +535,7 @@ class DestinationHead(nn.Module):
         self.mlp_out_dim = config['R2']['mlp_out_dim']
 
         # Define the layers of the model
-        
+
         # CEs
         self.CE_n = nn.Sequential(
             nn.Linear(self.mlp_out_dim, self.mlp_out_dim*2, bias=True),
@@ -558,7 +566,7 @@ class DestinationHead(nn.Module):
             'hidden_dim': self.ptr_dim*2,
             'softmax': True
         })
-    
+
     def forward(self, p, n, ap, an, mask=None):
         """
         Args:
@@ -630,7 +638,7 @@ class CargoHead(nn.Module):
             'hidden_dim': self.ptr_dim*2,
             'softmax': True
         })
-    
+
     def forward(self, c, p, ac, ap, mask=None):
         """
         Args:
@@ -638,7 +646,7 @@ class CargoHead(nn.Module):
             p: embeddings for planes
             a: flattened aggregation tensor (c_f x p_f)
             mask: additive mask
-        
+
         Returns: tensor (c x p) cargo probabilities
         """
 
@@ -673,7 +681,8 @@ class R1(nn.Module):
         # Define the layers of the model
 
         # Node up-projection
-        self.up_projection_n = nn.Linear(self.node_in_dim, self.node_dim, bias=True)
+        self.up_projection_n = nn.Linear(
+            self.node_in_dim, self.node_dim, bias=True)
 
         # Mixing Attention Configs
         n_config = {
@@ -752,7 +761,6 @@ class R1(nn.Module):
             self.non_linearity
         )
 
-    
     def forward(self, n, p, c):
         """
         Args:
@@ -809,8 +817,10 @@ class R2(nn.Module):
         # Define the layers of the model
 
         # Projections
-        self.up_projection_n = nn.Linear(self.node_in_dim, self.node_dim, bias=True)
-        self.down_projection_p = nn.Linear(self.plane_in_dim, self.plane_dim, bias=True)
+        self.up_projection_n = nn.Linear(
+            self.node_in_dim, self.node_dim, bias=True)
+        self.down_projection_p = nn.Linear(
+            self.plane_in_dim, self.plane_dim, bias=True)
 
         # Mixing Attention Configs
         n_config = {
@@ -896,7 +906,6 @@ class R2(nn.Module):
             self.non_linearity
         )
 
-    
     def forward(self, n, p, c, a_prev, y_a):
         """
         Args:
@@ -969,7 +978,7 @@ class R3(nn.Module):
         # Define the layers of the model
 
         # Create Embeddings
-        self.CE_P =nn.Sequential(
+        self.CE_P = nn.Sequential(
             nn.Linear(self.plane_in_dim, self.CE_hidden_dim, bias=True),
             self.non_linearity,
             nn.Linear(self.CE_hidden_dim, self.supp_dim),
@@ -983,9 +992,12 @@ class R3(nn.Module):
         )
 
         # Projections
-        self.projection_n = nn.Linear(self.node_in_dim+self.supp_dim, self.node_dim, bias=True)
-        self.projection_p = nn.Linear(self.supp_dim+self.plane_in_dim, self.plane_dim, bias=True)
-        self.projection_c = nn.Linear(self.cargo_in_dim, self.cargo_dim, bias=True)
+        self.projection_n = nn.Linear(
+            self.node_in_dim+self.supp_dim, self.node_dim, bias=True)
+        self.projection_p = nn.Linear(
+            self.supp_dim+self.plane_in_dim, self.plane_dim, bias=True)
+        self.projection_c = nn.Linear(
+            self.cargo_in_dim, self.cargo_dim, bias=True)
 
         # Mixing Attention Configs
         n_config = {
@@ -1072,7 +1084,6 @@ class R3(nn.Module):
             self.non_linearity
         )
 
-    
     def forward(self, n, p, c, a_prev, y_a, y_d):
         """
         Args:
@@ -1139,30 +1150,36 @@ class Aggregator(nn.Module):
         # m1
         self.m1 = []
         if config['num_layers'] == 1:
-            self.m1.append(nn.Linear(config['embed_dim'], config['agg_dim'], bias=config['bias']))
+            self.m1.append(
+                nn.Linear(config['embed_dim'], config['agg_dim'], bias=config['bias']))
             self.m1.append(config['non_linearity'])
         else:
             in_dim = config['embed_dim']
             for _ in range(config['num_layers']-1):
-                self.m1.append(nn.Linear(in_dim, config['ff_dim'], bias=config['bias']))
+                self.m1.append(
+                    nn.Linear(in_dim, config['ff_dim'], bias=config['bias']))
                 self.m1.append(config['non_linearity'])
                 in_dim = config['ff_dim']
-            self.m1.append(nn.Linear(config['ff_dim'], config['agg_dim'], bias=config['bias']))
+            self.m1.append(
+                nn.Linear(config['ff_dim'], config['agg_dim'], bias=config['bias']))
             self.m1.append(config['non_linearity'])
         self.m1 = nn.ModuleList(self.m1)
 
         # m2
         self.m2 = []
         if config['num_layers'] == 1:
-            self.m2.append(nn.Linear(config['embed_dim'], config['agg_dim'], bias=config['bias']))
+            self.m2.append(
+                nn.Linear(config['embed_dim'], config['agg_dim'], bias=config['bias']))
             self.m2.append(config['non_linearity'])
         else:
             in_dim = config['embed_dim']
             for _ in range(config['num_layers']-1):
-                self.m2.append(nn.Linear(in_dim, config['ff_dim'], bias=config['bias']))
+                self.m2.append(
+                    nn.Linear(in_dim, config['ff_dim'], bias=config['bias']))
                 self.m2.append(config['non_linearity'])
                 in_dim = config['ff_dim']
-            self.m2.append(nn.Linear(config['ff_dim'], config['agg_dim'], bias=config['bias']))
+            self.m2.append(
+                nn.Linear(config['ff_dim'], config['agg_dim'], bias=config['bias']))
             self.m2.append(config['non_linearity'])
         self.m2 = nn.ModuleList(self.m2)
 
@@ -1212,7 +1229,7 @@ class MHA(nn.Module):
 
         # Define the layers of the model
         self.attention = nn.MultiheadAttention(config['embed_dim'], config['num_heads'],
-                                                     bias=config['bias'])
+                                               bias=config['bias'])
         self.ff = nn.Sequential(
             nn.Linear(config['embed_dim'], config['ff_dim'], bias=True),
             config['non_linearity'],
@@ -1220,7 +1237,6 @@ class MHA(nn.Module):
         )
         self.norm1 = nn.LayerNorm(config['embed_dim'])
         self.norm2 = nn.LayerNorm(config['embed_dim'])
-
 
     def forward(self, q, k, v):
         """
@@ -1258,7 +1274,7 @@ class MHABlock(nn.Module):
         for _ in range(config['num_layers']):
             self.layers.append(MHA(config))
         self.layers = nn.ModuleList(self.layers)
-    
+
     def forward(self, q, k, v):
         """
         Forward pass of the MHABlock.
@@ -1291,10 +1307,12 @@ class Ptr(nn.Module):
         self.config = config
 
         # xc = Wx0X0 + Wx1X1 + ... + Bx
-        self.Wx = nn.Linear(config['embed_dim'], config['hidden_dim'], bias=True)
+        self.Wx = nn.Linear(config['embed_dim'],
+                            config['hidden_dim'], bias=True)
 
         # yc = Wy0Y0 + Wy1Y1 + ... + By
-        self.Wy = nn.Linear(config['embed_dim'], config['hidden_dim'], bias=True)
+        self.Wy = nn.Linear(config['embed_dim'],
+                            config['hidden_dim'], bias=True)
 
     def forward(self, x, y, mask=None, add_choice=False):
         """
@@ -1317,7 +1335,8 @@ class Ptr(nn.Module):
 
         # Add a NOOP choice if needed
         if add_choice:
-            ptr_mtx = torch.cat((ptr_mtx, torch.zeros(ptr_mtx.size(0), 1)), dim=1)
+            ptr_mtx = torch.cat(
+                (ptr_mtx, torch.zeros(ptr_mtx.size(0), 1)), dim=1)
 
         if mask is not None:
             ptr_mtx = ptr_mtx + mask
@@ -1327,7 +1346,7 @@ class Ptr(nn.Module):
             ptr_mtx = F.softmax(ptr_mtx, dim=-1)
 
         return ptr_mtx
-    
+
 
 class MixingAttention(nn.Module):
     """
@@ -1391,17 +1410,20 @@ class MixingAttention(nn.Module):
         """
 
         # X = concat(attn(X, Y, Y), attn(X, Z, Z))WX
-        X = torch.cat((self.MHA_XXX(x, x, x) ,self.MHA_XYY(x, y, y), self.MHA_XZZ(x, z, z)), dim=1)
+        X = torch.cat((self.MHA_XXX(x, x, x), self.MHA_XYY(
+            x, y, y), self.MHA_XZZ(x, z, z)), dim=1)
         X = self.ff_x(X)
         X = self.norm_x(self.config['x']['non_linearity'](X) + x)
 
         # Y = concat(attn(Y, X, X), attn(Y, Z, Z))WY
-        Y = torch.cat((self.MHA_YYY(y, y, y), self.MHA_YXX(y, x, x), self.MHA_YZZ(y, z, z)), dim=1)
+        Y = torch.cat((self.MHA_YYY(y, y, y), self.MHA_YXX(
+            y, x, x), self.MHA_YZZ(y, z, z)), dim=1)
         Y = self.ff_y(Y)
         Y = self.norm_y(self.config['y']['non_linearity'](Y) + y)
-        
+
         # Z = concat(attn(Z, X, X), attn(Z, Y, Y))WZ
-        Z = torch.cat((self.MHA_ZZZ(z, z, z), self.MHA_ZXX(z, x, x), self.MHA_ZYY(z, y, y)), dim=1)
+        Z = torch.cat((self.MHA_ZZZ(z, z, z), self.MHA_ZXX(
+            z, x, x), self.MHA_ZYY(z, y, y)), dim=1)
         Z = self.ff_z(Z)
         Z = self.norm_z(self.config['z']['non_linearity'](Z) + z)
 
@@ -1424,7 +1446,7 @@ class MixingAttentionBlock(nn.Module):
         for _ in range(config['num_layers']):
             self.layers.append(MixingAttention(config))
         self.layers = nn.ModuleList(self.layers)
-    
+
     def forward(self, x, y, z):
         """
         Forward pass of the MixingAttentionBlock.
@@ -1470,17 +1492,19 @@ class GATBlock(nn.Module):
         self.layers = []
         self.norms = []
         if num_layers == 1:
-            self.layers.append(GATConv(in_channels, out_channels, edge_dim=edge_dim))
+            self.layers.append(
+                GATConv(in_channels, out_channels, edge_dim=edge_dim))
             self.norms.append(nn.LayerNorm(out_channels))
         else:
             for i in range(num_layers-1):
                 in_channels = in_channels if i == 0 else hidden_channels
-                self.layers.append(GATConv(in_channels, hidden_channels, edge_dim=edge_dim))
+                self.layers.append(
+                    GATConv(in_channels, hidden_channels, edge_dim=edge_dim))
                 self.norms.append(nn.LayerNorm(hidden_channels))
-            self.layers.append(GATConv(hidden_channels, out_channels, edge_dim=edge_dim))
+            self.layers.append(
+                GATConv(hidden_channels, out_channels, edge_dim=edge_dim))
             self.norms.append(nn.LayerNorm(out_channels))
         self.layers = nn.ModuleList(self.layers)
-        
 
     def forward(self, data):
         """
@@ -1493,7 +1517,7 @@ class GATBlock(nn.Module):
             y: tensor (#nodes x #features) embeddings for nodes
         """
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
-        
+
         for layer, norm in zip(self.layers, self.norms):
             x = layer(x, edge_index, edge_attr=edge_attr)
             x = self.config['non_linearity'](x)
