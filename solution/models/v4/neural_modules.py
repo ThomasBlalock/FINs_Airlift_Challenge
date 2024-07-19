@@ -18,6 +18,7 @@ class FlexibleInputNetwork(nn.Module):
         """
         self.in_set = in_set
         self.n = len(in_set)
+        self.input_keys = list(in_set.keys()).sort()
         assert self.n>0, "Input set must have at least one element"
 
 
@@ -50,66 +51,69 @@ class SelfProjection(FlexibleInputNetwork):
                 config[input_key]['FF_expansion_factor'] = 2
             if 'output' not in config[input_key]:
                 config[input_key]['output'] = True
-
+        
         # Z = vec(||_i=1->N(X_i*W_i1).T * (X_i*W_i)2)
-        self.W_Z = {}
-        for input_key in in_set.keys():
+        self.W_Z = nn.ParameterDict()
+        for input_key in self.input_keys:
             self.W_Z[input_key] = (nn.Parameter(torch.randn(in_set[input_key], config[input_key]['W_Z'])),
-                                   nn.Parameter(torch.randn(in_set[input_key], config[input_key]['W_Z'])),)
+                                   nn.Parameter(torch.randn(in_set[input_key], config[input_key]['W_Z'])))
         
         # Z el-of R^(SUM_i=1->n(d_i^2))
         self.Z_dim = sum([d_i**2 for d_i in in_set.values()])
 
         # A_i = mat(MLP(Z), d_i, d_ia)
-        self.MLP_A = {}
-        for input_key in in_set.keys():
+        self.MLP_A = nn.ModuleDict()
+        for input_key in self.input_keys:
             if not config[input_key]['output']:
                 continue
             self.MLP_A[input_key] = nn.Sequential(
-                nn.Linear(self.Z_dim, config['MLP_hidden_dim']),
+                nn.Linear(self.Z_dim, config['MLP_hidden_dim'], bias=True),
                 config['non_linearity'],
-                nn.Linear(config['MLP_hidden_dim'], in_set[input_key]*config[input_key]['d_ia'])
+                nn.Linear(config['MLP_hidden_dim'], in_set[input_key]*config[input_key]['d_ia'], bias=True)
             )
 
-        # SP_i = FF_i(X_i||x_i*A_i)
-        self.FF = {}
-        for input_key in in_set.keys():
+        # SP_i = LN(FF_i(X_i||x_i*A_i))
+        self.FF = nn.ModuleDict()
+        self.LN = nn.ModuleDict()
+        for input_key in self.input_keys:
             if not config[input_key]['output']:
                 continue
             FF_dim = in_set[input_key]+config[input_key]['d_ia']
             self.FF[input_key] = nn.Sequential(
-                nn.Linear(FF_dim, FF_dim*config[input_key]['FF_expansion_factor']),
+                nn.Linear(FF_dim, FF_dim*config[input_key]['FF_expansion_factor'], bias=True),
                 config['non_linearity'],
                 nn.Linear(FF_dim*config[input_key]['FF_expansion_factor'], in_set[input_key])
             )
+            self.LN[input_key] = nn.LayerNorm(in_set[input_key])
 
     def forward(self, X):
 
         # Z = vec(||_i=1->N(X_i*W_i1).T * (X_i*W_i)2)
-        Z = torch.cat([torch.matmul(X[input_key], W[0]).T * torch.matmul(X[input_key], W[1])
-                       for input_key, W in self.W_Z.items()], dim=1)
+        Z = torch.cat([torch.matmul(torch.matmul(X[input_key], self.W_Z[input_key][0]).T,\
+                        torch.matmul(X[input_key], self.W_Z[input_key][1]))
+                       for input_key in self.input_keys], dim=1)
         Z = torch.reshape(Z, (-1, self.Z_dim))
         Z = self.config['non_linearity'](Z)
 
-        # A_i = mat(MLP(Z), d_i, d_ia)
+        # A_i = softmax(mat(MLP(Z), d_i, d_ia), across columns)
         A = {}
-        for input_key in self.MLP_A.keys():
+        for input_key in self.input_keys:
             if not self.config[input_key]['output']:
                 continue
-            A[input_key] = torch.reshape(
-                self.MLP_A[input_key](Z), (-1, self.in_set[input_key], self.config[input_key]['d_ia']))
+            A[input_key] = F.softmax(torch.reshape(
+                self.MLP_A[input_key](Z), (-1, self.in_set[input_key], self.config[input_key]['d_ia'])), dim=-2)
         
-        # out_set_i = FF_i(X_i||x_i*A_i)
+        # out_set_i = relu(FF_i(X_i||x_i*A_i))
         Y = {}
-        for input_key in self.FF.keys():
+        for input_key in self.input_keys:
             if not self.config[input_key]['output']:
                 continue
-            Y[input_key] = self.FF[input_key](
+            Y[input_key] = self.LN[input_key](self.FF[input_key](
                 self.config['non_linearity'](
-                    torch.cat([X[input_key], torch.matmul(X[input_key], A[input_key])], dim=2)))
+                    torch.cat([X[input_key], torch.matmul(X[input_key], A[input_key])], dim=2))))
         
         return Y
-    
+
 
 
 class MixingAttention(FlexibleInputNetwork):
@@ -140,20 +144,22 @@ class MixingAttention(FlexibleInputNetwork):
             if 'FF_expansion_factor' not in config[input_key]:
                 config[input_key]['FF_expansion_factor'] = 2
 
+        self.input_keys = list(in_set.keys()).sort()
+
         # Z_i = LN(||_j=1->n(MHA(X_i, X_j, X_j)))
-        self.MHA = {}
-        self.LN_Z = {}
+        self.MHA = nn.ModuleDict()
+        self.LN_Z = nn.ModuleDict()
         self.Z_dim = sum([d_i for d_i in in_set.values() if config[input_key]['output']])
-        for input_key in in_set.keys():
+        for input_key in self.input_keys:
             if not config[input_key]['output']:
                 continue
             self.MHA[input_key] = nn.MultiheadAttention(in_set[input_key], config[input_key]['num_heads'])
             self.LN_Z[input_key] = nn.LayerNorm(self.Z_dim)
         
         # A_i = (FF(Z_i)+Z_i)W0_i
-        self.FF_A = {}
-        self.W0_A = {}
-        for input_key in in_set.keys():
+        self.FF_A = nn.ModuleDict()
+        self.W0_A = nn.ParameterDict()
+        for input_key in self.input_keys:
             if not config[input_key]['output']:
                 continue
             self.FF_A[input_key] = nn.Sequential(
@@ -164,8 +170,8 @@ class MixingAttention(FlexibleInputNetwork):
             self.W0_A[input_key] = nn.Parameter(torch.randn(self.Z_dim, in_set[input_key]))
         
         # MA_i = LN(X_i + A_i)
-        self.LN_out = {}
-        for input_key in in_set.keys():
+        self.LN_out = nn.ModuleDict()
+        for input_key in self.input_keys:
             if not config[input_key]['output']:
                 continue
             self.LN_out[input_key] = nn.LayerNorm(in_set[input_key])
@@ -174,23 +180,121 @@ class MixingAttention(FlexibleInputNetwork):
 
         # Z_i = LN(||_j=1->n(MHA(X_i, X_j, X_j)))
         Z = {}
-        for i in X.keys():
+        for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
-            Z.append(self.LN_Z[i](torch.cat([self.MHA[i](X[i], X[j], X[j])[0] for j in X.keys()], dim=2)))
+            Z[i] = self.LN_Z[i](torch.cat([self.MHA[i](X[i], X[j], X[j])[0] for j in self.input_keys], dim=2))
         
-        # A_i = (FF(Z_i)+Z_i)W0_i
+        # A_i = relu(FF(Z_i)+Z_i)W0_i
         A = {}
-        for i in X.keys():
+        for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
-            A[i] = torch.matmul(self.FF_A[i](Z[i])+Z[i], self.W0_A[i])
+            A[i] = torch.matmul(self.config['non_linearity'](self.FF_A[i](Z[i])+Z[i]), self.W0_A[i])
         
-        # MA_i = LN(X_i + A_i)
+        # MA_i = relu(LN(X_i + A_i))
         Y = {}
-        for i in X.keys():
+        for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
-            Y[i] = self.LN_out[i](X[i]+A[i])
+            Y[i] = self.config['non_linearity'](self.LN_out[i](X[i]+A[i]))
         
         return Y
+
+
+
+class Ptr(nn.Module):
+
+    def __init__(self, config):
+        super(Ptr, self).__init__()
+        """
+        config: {
+            'embed_dim': int, dimension of the embeddings
+            'hidden_dim': int (default=embed_dim), dimension of the hidden layer
+            'softmax': bool (default=True), whether to apply softmax
+        }
+        """
+        if 'softmax' not in config.keys():
+            config['softmax'] = True
+        if 'hidden_dim' not in config.keys():
+            try:
+                config['hidden_dim'] = config['embed_dim']
+            except:
+                raise ValueError("embed_dim not included in Ptr config")
+        self.config = config
+
+        # xc = Wx0X0 + Wx1X1 + ... + Bx
+        self.Wx = nn.Linear(config['embed_dim'],
+                            config['hidden_dim'], bias=True)
+
+        # yc = Wy0Y0 + Wy1Y1 + ... + By
+        self.Wy = nn.Linear(config['embed_dim'],
+                            config['hidden_dim'], bias=True)
+
+    def forward(self, x, y, mask=None, add_choice=False):
+        """
+        Args:
+            x (list): list of tensors for the first entity
+            y (list): list of tensors for the second entity
+            mask (tensor): mask for the attention (additive mask)
+
+        Returns:
+            ptr_mtx: tensor (#x x #y) attention weights
+        """
+
+        xc = self.Wx(x)
+        yc = self.Wy(y)
+
+        # ptr = softmax((xc * ycT) / sqrt(d_k))
+        ptr_mtx = torch.matmul(xc, yc.T) / xc.size(-1)**0.5
+
+        # Add a NOOP choice if needed
+        if add_choice:
+            ptr_mtx = torch.cat(
+                (ptr_mtx, torch.zeros(ptr_mtx.size(0), 1)), dim=1)
+
+        if mask is not None:
+            ptr_mtx = ptr_mtx + mask
+
+        # softmax
+        if self.config['softmax']:
+            ptr_mtx = F.softmax(ptr_mtx, dim=-1)
+
+        return ptr_mtx
+
+
+
+
+class TransformerLayer(nn.Module):
+
+    def __init__(self, config):
+        """
+        config: {
+            'embed_dim': int, dimension of the embeddings
+            'num_heads': int, number of heads
+            'num_layers': int, number of layers
+            'ff_dim': int, dimension of the feedforward layer
+            'self_attention': bool, whether to use self-attention
+            'non_linearity': nn.Module, non-linearity function
+        }
+        """
+        super(TransformerLayer, self).__init__()
+        self.config = config
+
+        # Define the layers of the model
+        self.attention = nn.MultiheadAttention(config['embed_dim'], config['num_heads'])
+        self.ff = nn.Sequential(
+            nn.Linear(config['embed_dim'], config['ff_dim'], bias=True),
+            config['non_linearity'],
+            nn.Linear(config['ff_dim'], config['embed_dim'])
+        )
+        self.norm1 = nn.LayerNorm(config['embed_dim'])
+        self.norm2 = nn.LayerNorm(config['embed_dim'])
+
+    def forward(self, q, k, v):
+
+        v, _ = self.attention(q, k, v)
+        v = self.norm1(v + q)
+        v = self.norm2(v + self.ff(v))
+
+        return v
