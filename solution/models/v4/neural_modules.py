@@ -104,14 +104,14 @@ class SelfProjection(FlexibleInputNetwork):
             A[input_key] = F.softmax(torch.reshape(
                 self.MLP_A[input_key](Z), (-1, self.in_set[input_key], self.config[input_key]['d_ia'])), dim=-2)
         
-        # out_set_i = relu(FF_i(X_i||x_i*A_i))
+        # out_set_i = relu(FF_i(X_i||X_i*A_i))
         Y = {}
         for input_key in self.input_keys:
             if not self.config[input_key]['output']:
                 continue
             Y[input_key] = self.LN[input_key](self.FF[input_key](
-                self.config['non_linearity'](
-                    torch.cat([X[input_key], torch.matmul(X[input_key], A[input_key])], dim=2))))
+                    torch.cat([X[input_key], self.config['non_linearity'](
+                        torch.matmul(X[input_key], A[input_key]))], dim=2)))
         
         return Y
 
