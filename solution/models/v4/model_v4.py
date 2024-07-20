@@ -3,6 +3,9 @@ from torch_geometric.data import Data
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv
+from neural_modules import MixingAttention, SelfProjection,\
+Ptr, TransformerLayer, GATTransformerLayer
+
 
 
 """
@@ -22,83 +25,76 @@ def count_parameters(model):
     return param_count
 
 
-def get_config():
-    return {
-        'encoder': {
-            'node_in_dim': 3,
-            'node_out_dim': 8,
-            'plane_in_dim': 9,
-            'plane_out_dim': 32,
-            'cargo_in_dim': 11,
-            'cargo_out_dim': 32,
-        },
-        'R1': {
-            'node_dim': 32,
-        },
-        'R2': {
-            'plane_dim': 32,
-            'node_dim': 32,
-            'mlp_out_dim': 16,
-        },
-        'R3': {
-            'plane_dim': 64,
-            'cargo_dim': 64,
-            'mlp_out_dim': 16,
-        }
-    }
-
-
 class Encoder(nn.Module):
-    """
-    Encoder for the Airlift solution.
-    """
 
-    def __init__(self):
+    def __init__(self, config):
+        """
+        config: { 
+            nodes: {
+                in_dim: int input dimension
+                out_dim: int output dimension
+            },
+            agents: {
+                in_dim: int input dimension
+                out_dim: int output dimension
+            },
+            cargo: {
+                in_dim: int input dimension
+                out_dim: int output dimension
+            }
+        }
+        """
         super(Encoder, self).__init__()
-        self.non_linearity = nn.LeakyReLU(0.2)
-        config = get_config()['encoder']
-        self.node_in_dim = config['node_in_dim']
-        self.f_n = config['node_out_dim']
-        self.plane_in_dim = config['plane_in_dim']
-        self.f_p = config['plane_out_dim']
-        self.cargo_in_dim = config['cargo_in_dim']
-        self.f_c = config['cargo_out_dim']
-
-        # Define the layers of the model
-
-        # GAT for nodes
-        self.GAT = GATBlock({
-            'edge_features': 5,
-            'in_features': self.node_in_dim,
-            'hidden_features': 16,
-            'out_features': self.f_n,
-            'num_layers': 3,
-            'non_linearity': self.non_linearity,
-        })
+        self.config = config
+        self.nl = nn.LeakyReLU(0.2) #nl = non-linearity
 
         # Up-Projections
-        self.up_projection_planes = nn.Linear(self.plane_in_dim, self.f_p)
-        self.up_projection_cargo = nn.Linear(self.cargo_in_dim, self.f_c)
+        self.up_projection_n = nn.Sequential(
+            nn.Linear(config['nodes']['in_dim'], config['nodes']['out_dim'],
+                      bias=True),
+            self.nl
+        )
+        self.up_projection_a = nn.Sequential(
+            nn.Linear(config['agents']['in_dim'], config['agents']['out_dim'],
+                      bias=True),
+            self.nl
+        )
+        self.up_projection_c = nn.Sequential(
+            nn.Linear(config['cargo']['in_dim'], config['cargo']['out_dim'],
+                      bias=True),
+            self.nl
+        )
 
-        # Self-attention layers
-        self.MHA_planes = MHABlock({
-            'embed_dim': self.f_p,
-            'num_heads': 4,
-            'num_layers': 2,
-            'ff_dim': 128,
-            'bias': False,
-            'self_attention': True,
-            'non_linearity': self.non_linearity
-        })
-        self.MHA_cargo = MHABlock({
-            'embed_dim': self.f_c,
-            'num_heads': 4,
-            'num_layers': 2,
-            'ff_dim': 128,
-            'bias': False,
-            'self_attention': True,
-            'non_linearity': self.non_linearity
-        })
+        # GAT
+        self.GAT = nn.ModuleList(
+            [GATTransformerLayer({
+                'embed_dim': config['nodes']['out_dim'],
+                'num_heads': 4,
+                'ff_expansion_factor': 2,
+                'non_linearity': self.nl,
+            }) for _ in range(3)]
+        )
+
+        # Plane Transformer
+        self.plane_transformer = nn.ModuleList(
+            [TransformerLayer({
+                'embed_dim': config['agents']['out_dim'],
+                'num_heads': 4,
+                'ff_expansion_factor': 2,
+                'non_linearity': self.nl,
+            }) for _ in range(3)]
+        )
+
+        # Cargo Transformer
+        self.cargo_transformer = nn.ModuleList(
+            [TransformerLayer({
+                'embed_dim': config['cargo']['out_dim'],
+                'num_heads': 4,
+                'ff_expansion_factor': 2,
+                'non_linearity': self.nl,
+            }) for _ in range(3)]
+        )
+
 
     def forward(self, x):
         """
@@ -127,18 +123,20 @@ class Encoder(nn.Module):
         plane_embeddings = x['agents']['tensor']
         cargo_embeddings = x['cargo']['tensor']
 
-        # GAT for nodes
-        node_embeddings = self.GAT(node_embeddings)
+        # Embed Nodes
+        node_embeddings, edge_index, edge_attr =\
+            node_embeddings.x, node_embeddings.edge_index, node_embeddings.edge_attr
+        node_embeddings = self.up_projection_n(node_embeddings)
+        for layer in self.GAT:
+            node_embeddings = layer(node_embeddings, edge_index, edge_attr)
+        
+        # Embed Planes
+        for layer in self.plane_transformer:
+            plane_embeddings = layer(plane_embeddings)
 
-        # Up-Projections
-        plane_embeddings = self.up_projection_planes(plane_embeddings)
-        cargo_embeddings = self.up_projection_cargo(cargo_embeddings)
-
-        # Self-attention layers
-        plane_embeddings = self.MHA_planes(
-            plane_embeddings, plane_embeddings, plane_embeddings)
-        cargo_embeddings = self.MHA_cargo(
-            cargo_embeddings, cargo_embeddings, cargo_embeddings)
+        # Embed Cargo
+        for layer in self.cargo_transformer:
+            cargo_embeddings = layer(cargo_embeddings)
 
         return {
             'cargo_embeddings': cargo_embeddings,
@@ -1137,332 +1135,6 @@ class R3(nn.Module):
             'ac': ac,
             'ap': ap
         }
-
-
-class Aggregator(nn.Module):
-
-    def __init__(self, config):
-        super(Aggregator, self).__init__()
-        self.config = config
-
-        # Define the layers of the model
-
-        # m1
-        self.m1 = []
-        if config['num_layers'] == 1:
-            self.m1.append(
-                nn.Linear(config['embed_dim'], config['agg_dim'], bias=config['bias']))
-            self.m1.append(config['non_linearity'])
-        else:
-            in_dim = config['embed_dim']
-            for _ in range(config['num_layers']-1):
-                self.m1.append(
-                    nn.Linear(in_dim, config['ff_dim'], bias=config['bias']))
-                self.m1.append(config['non_linearity'])
-                in_dim = config['ff_dim']
-            self.m1.append(
-                nn.Linear(config['ff_dim'], config['agg_dim'], bias=config['bias']))
-            self.m1.append(config['non_linearity'])
-        self.m1 = nn.ModuleList(self.m1)
-
-        # m2
-        self.m2 = []
-        if config['num_layers'] == 1:
-            self.m2.append(
-                nn.Linear(config['embed_dim'], config['agg_dim'], bias=config['bias']))
-            self.m2.append(config['non_linearity'])
-        else:
-            in_dim = config['embed_dim']
-            for _ in range(config['num_layers']-1):
-                self.m2.append(
-                    nn.Linear(in_dim, config['ff_dim'], bias=config['bias']))
-                self.m2.append(config['non_linearity'])
-                in_dim = config['ff_dim']
-            self.m2.append(
-                nn.Linear(config['ff_dim'], config['agg_dim'], bias=config['bias']))
-            self.m2.append(config['non_linearity'])
-        self.m2 = nn.ModuleList(self.m2)
-
-    def forward(self, x):
-        """
-        Forward pass of the Aggregator layer.
-
-        Args:
-            x: tensor (#x x #f) embeddings
-
-        Returns:
-            r: tensor (#agg_dim x #agg_dim) aggregated embeddings
-        """
-
-        x1 = x
-        for layer in self.m1:
-            x1 = layer(x1)
-        # x1 - (#x x agg_dim)
-
-        x2 = x
-        for layer in self.m2:
-            x2 = layer(x2)
-        # x2 - (#x x agg_dim)
-
-        return torch.matmul(x1.T, x2).view(-1, self.config['agg_dim']**2)
-
-
-class MHA(nn.Module):
-    """
-    Attention layer for the Airlift solution.
-    """
-
-    def __init__(self, config):
-        """
-        config: {
-            'embed_dim': int, dimension of the embeddings
-            'num_heads': int, number of heads
-            'num_layers': int, number of layers
-            'ff_dim': int, dimension of the feedforward layer
-            'bias': bool, whether to use bias
-            'self_attention': bool, whether to use self-attention
-            'non_linearity': nn.Module, non-linearity function
-        }
-        """
-        super(MHA, self).__init__()
-        self.config = config
-
-        # Define the layers of the model
-        self.attention = nn.MultiheadAttention(config['embed_dim'], config['num_heads'],
-                                               bias=config['bias'])
-        self.ff = nn.Sequential(
-            nn.Linear(config['embed_dim'], config['ff_dim'], bias=True),
-            config['non_linearity'],
-            nn.Linear(config['ff_dim'], config['embed_dim'])
-        )
-        self.norm1 = nn.LayerNorm(config['embed_dim'])
-        self.norm2 = nn.LayerNorm(config['embed_dim'])
-
-    def forward(self, q, k, v):
-        """
-        Forward pass of the attention layer.
-
-        Args:
-            k: tensor (#k x #f) keys
-            q: tensor (#q x #f) queries
-            v: tensor (#v x #f) values
-
-        Returns:
-            r: tensor (#q x #f) attended values
-        """
-
-        v, _ = self.attention(q, k, v)
-        v = self.norm1(v + q)
-        v = self.norm2(v + self.ff(v))
-
-        return v
-
-
-class MHABlock(nn.Module):
-    """
-    Multiple layers of MHA for the Airlift solution.
-    """
-
-    def __init__(self, config):
-        super(MHABlock, self).__init__()
-        self.config = config
-
-        # Define the layers of the model
-
-        # MHA layers x4
-        self.layers = []
-        for _ in range(config['num_layers']):
-            self.layers.append(MHA(config))
-        self.layers = nn.ModuleList(self.layers)
-
-    def forward(self, q, k, v):
-        """
-        Forward pass of the MHABlock.
-
-        Args:
-            k: tensor (#k x #f) keys
-            q: tensor (#q x #f) queries
-            v: tensor (#v x #f) values
-
-        Returns:
-            r: tensor (#q x #f) attended values
-        """
-
-        for layer in self.layers:
-            if self.config['self_attention']:
-                v = layer(v, v, v)
-            else:
-                v = layer(q, k, v)
-
-        return v
-
-
-class Ptr(nn.Module):
-    """
-    Pointer Network With Context
-    """
-
-    def __init__(self, config):
-        super(Ptr, self).__init__()
-        self.config = config
-
-        # xc = Wx0X0 + Wx1X1 + ... + Bx
-        self.Wx = nn.Linear(config['embed_dim'],
-                            config['hidden_dim'], bias=True)
-
-        # yc = Wy0Y0 + Wy1Y1 + ... + By
-        self.Wy = nn.Linear(config['embed_dim'],
-                            config['hidden_dim'], bias=True)
-
-    def forward(self, x, y, mask=None, add_choice=False):
-        """
-        Forward pass of the PNWC layer.
-
-        Args:
-            x (list): list of tensors for the first entity
-            y (list): list of tensors for the second entity
-            mask (tensor): mask for the attention (additive mask)
-
-        Returns:
-            ptr_mtx: tensor (#x x #y) attention weights
-        """
-
-        xc = self.Wx(x)
-        yc = self.Wy(y)
-
-        # ptr = softmax((xc * ycT) / sqrt(d_k))
-        ptr_mtx = torch.matmul(xc, yc.T) / xc.size(-1)**0.5
-
-        # Add a NOOP choice if needed
-        if add_choice:
-            ptr_mtx = torch.cat(
-                (ptr_mtx, torch.zeros(ptr_mtx.size(0), 1)), dim=1)
-
-        if mask is not None:
-            ptr_mtx = ptr_mtx + mask
-
-        # softmax
-        if self.config['softmax']:
-            ptr_mtx = F.softmax(ptr_mtx, dim=-1)
-
-        return ptr_mtx
-
-
-class MixingAttention(nn.Module):
-    """
-    Mixing Attention layer for the Airlift solution.
-    """
-
-    def __init__(self, config):
-        super(MixingAttention, self).__init__()
-        self.config = config
-
-        # Define the layers of the model
-
-        # attn X
-        self.MHA_XXX = MHA(config['x'])
-        self.MHA_XYY = MHA(config['x'])
-        self.MHA_XZZ = MHA(config['x'])
-        # ff_X
-        self.ff_x = nn.Sequential(
-            nn.Linear(config['x']['embed_dim']*3, config['x']['ff_dim']*3),
-            config['x']['non_linearity'],
-            nn.Linear(config['x']['ff_dim']*3, config['x']['embed_dim'])
-        )
-        # LayerNorm
-        self.norm_x = nn.LayerNorm(config['x']['embed_dim'])
-
-        # attn Y
-        self.MHA_YYY = MHA(config['y'])
-        self.MHA_YXX = MHA(config['y'])
-        self.MHA_YZZ = MHA(config['y'])
-        # ff_y
-        self.ff_y = nn.Sequential(
-            nn.Linear(config['y']['embed_dim']*3, config['y']['ff_dim']*3),
-            config['y']['non_linearity'],
-            nn.Linear(config['y']['ff_dim']*3, config['y']['embed_dim'])
-        )
-        # LayerNorm
-        self.norm_y = nn.LayerNorm(config['y']['embed_dim'])
-
-        # attn Z
-        self.MHA_ZZZ = MHA(config['z'])
-        self.MHA_ZXX = MHA(config['z'])
-        self.MHA_ZYY = MHA(config['z'])
-        # ff_z
-        self.ff_z = nn.Sequential(
-            nn.Linear(config['z']['embed_dim']*3, config['z']['ff_dim']*3),
-            config['z']['non_linearity'],
-            nn.Linear(config['z']['ff_dim']*3, config['z']['embed_dim'])
-        )
-        # LayerNorm
-        self.norm_z = nn.LayerNorm(config['z']['embed_dim'])
-
-    def forward(self, x, y, z):
-        """
-        Forward pass of the mixing attention layer.
-
-        Args:
-            x, y, z: tensor embeddings of three related entities
-
-        Returns:
-            X, Y, Z: tensors attended to by the other two
-        """
-
-        # X = concat(attn(X, Y, Y), attn(X, Z, Z))WX
-        X = torch.cat((self.MHA_XXX(x, x, x), self.MHA_XYY(
-            x, y, y), self.MHA_XZZ(x, z, z)), dim=1)
-        X = self.ff_x(X)
-        X = self.norm_x(self.config['x']['non_linearity'](X) + x)
-
-        # Y = concat(attn(Y, X, X), attn(Y, Z, Z))WY
-        Y = torch.cat((self.MHA_YYY(y, y, y), self.MHA_YXX(
-            y, x, x), self.MHA_YZZ(y, z, z)), dim=1)
-        Y = self.ff_y(Y)
-        Y = self.norm_y(self.config['y']['non_linearity'](Y) + y)
-
-        # Z = concat(attn(Z, X, X), attn(Z, Y, Y))WZ
-        Z = torch.cat((self.MHA_ZZZ(z, z, z), self.MHA_ZXX(
-            z, x, x), self.MHA_ZYY(z, y, y)), dim=1)
-        Z = self.ff_z(Z)
-        Z = self.norm_z(self.config['z']['non_linearity'](Z) + z)
-
-        return X, Y, Z
-
-
-class MixingAttentionBlock(nn.Module):
-    """
-    Layers of MixingAttention for the Airlift solution.
-    """
-
-    def __init__(self, config):
-        super(MixingAttentionBlock, self).__init__()
-        self.config = config
-
-        # Define the layers of the model
-
-        # Mixing Attention layers
-        self.layers = []
-        for _ in range(config['num_layers']):
-            self.layers.append(MixingAttention(config))
-        self.layers = nn.ModuleList(self.layers)
-
-    def forward(self, x, y, z):
-        """
-        Forward pass of the MixingAttentionBlock.
-
-        Args:
-            x, y, z: tensor embeddings of three related entities
-
-        Returns:
-            X, Y, Z: tensors attended to by the other two
-        """
-
-        for layer in self.layers:
-            x, y, z = layer(x, y, z)
-
-        return x, y, z
-
 
 class GATBlock(nn.Module):
     """

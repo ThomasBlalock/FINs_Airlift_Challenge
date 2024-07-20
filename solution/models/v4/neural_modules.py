@@ -2,6 +2,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 import torch
 import torch.nn.functional as F
+from torch_geometric.nn import GATConv
 
 # TODO: make a sorted list of keys to ensure the order of the input set
 
@@ -264,7 +265,6 @@ class Ptr(nn.Module):
 
 
 
-
 class TransformerLayer(nn.Module):
 
     def __init__(self, config):
@@ -272,9 +272,7 @@ class TransformerLayer(nn.Module):
         config: {
             'embed_dim': int, dimension of the embeddings
             'num_heads': int, number of heads
-            'num_layers': int, number of layers
-            'ff_dim': int, dimension of the feedforward layer
-            'self_attention': bool, whether to use self-attention
+            'ff_expansion_factor': int, expansion of the feedforward layer
             'non_linearity': nn.Module, non-linearity function
         }
         """
@@ -284,9 +282,11 @@ class TransformerLayer(nn.Module):
         # Define the layers of the model
         self.attention = nn.MultiheadAttention(config['embed_dim'], config['num_heads'])
         self.ff = nn.Sequential(
-            nn.Linear(config['embed_dim'], config['ff_dim'], bias=True),
+            nn.Linear(config['embed_dim'], 
+                      config['ff_expansion_facto']*config['embed_dim'], bias=True),
             config['non_linearity'],
-            nn.Linear(config['ff_dim'], config['embed_dim'])
+            nn.Linear(config['ff_expansion_facto']*config['embed_dim'],
+                      config['embed_dim'])
         )
         self.norm1 = nn.LayerNorm(config['embed_dim'])
         self.norm2 = nn.LayerNorm(config['embed_dim'])
@@ -295,6 +295,43 @@ class TransformerLayer(nn.Module):
 
         v, _ = self.attention(q, k, v)
         v = self.norm1(v + q)
+        v = self.norm2(v + self.ff(v))
+
+        return v
+    
+
+
+class GATTransformerLayer(nn.Module):
+
+    def __init__(self, config):
+        """
+        config: {
+            'embed_dim': int, dimension of the embeddings
+            'num_heads': int, number of heads
+            'ff_expansion_factor': int, expansion of the feedforward layer
+            'non_linearity': nn.Module, non-linearity function
+        }
+        """
+        super(GATTransformerLayer, self).__init__()
+        self.config = config
+
+        # Define the layers of the model
+        self.GAT = GATConv(self.config['embed_dim'], self.config['embed_dim'],
+                           heads=self.config['num_heads'])
+        self.ff = nn.Sequential(
+            nn.Linear(config['embed_dim'],
+                      config['ff_expansion_factor']*config['embed_dim'], bias=True),
+            config['non_linearity'],
+            nn.Linear(config['ff_expansion_factor']*config['embed_dim'],
+                      config['embed_dim'])
+        )
+        self.norm1 = nn.LayerNorm(config['embed_dim'])
+        self.norm2 = nn.LayerNorm(config['embed_dim'])
+
+    def forward(self, x, edge_index, edge_attr):
+
+        v = self.GAT(x, edge_index, edge_attr=edge_attr)
+        v = self.norm1(v + x)
         v = self.norm2(v + self.ff(v))
 
         return v
