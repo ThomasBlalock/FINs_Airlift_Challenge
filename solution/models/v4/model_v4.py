@@ -139,6 +139,14 @@ class Encoder(nn.Module):
         cargo_embeddings = self.up_projection_c(cargo_embeddings)
         for layer in self.cargo_transformer:
             cargo_embeddings = layer(cargo_embeddings)
+        
+        # Reshape into (-1 x n x f) if there's only 2 dimensions
+        if len(node_embeddings.shape) == 2:
+            node_embeddings = torch.reshape(node_embeddings, (-1, node_embeddings.shape[0], node_embeddings.shape[1]))
+            plane_embeddings = torch.reshape(plane_embeddings, (-1, plane_embeddings.shape[0], plane_embeddings.shape[1]))
+            cargo_embeddings = torch.reshape(cargo_embeddings, (-1, cargo_embeddings.shape[0], cargo_embeddings.shape[1]))
+
+        print(node_embeddings.shape, plane_embeddings.shape, cargo_embeddings.shape)
 
         return {
             'cargo_embeddings': cargo_embeddings,
@@ -863,7 +871,7 @@ class SelfProjection(FlexibleInputNetwork):
                                    nn.Parameter(torch.randn(in_set[input_key], config[input_key]['W_Z'])))
         
         # Z el-of R^(SUM_i=1->n(d_i^2))
-        self.Z_dim = sum([d_i**2 for d_i in in_set.values()])
+        self.Z_dim = sum([k['W_Z']**2 for k in config.values() if isinstance(k, dict)])
 
         # A_i = mat(MLP(Z), d_i, d_ia)
         self.MLP_A = nn.ModuleDict()
@@ -913,8 +921,8 @@ class SelfProjection(FlexibleInputNetwork):
             if not self.config[input_key]['output']:
                 continue
             Y[input_key] = self.LN[input_key](self.FF[input_key](
-                    torch.cat([X[input_key], self.config['non_linearity'](
-                        torch.matmul(X[input_key], A[input_key]))], dim=-1)))
+                    torch.cat([X[input_key],
+                        torch.matmul(X[input_key], A[input_key])], dim=-1)))
         
         return Y
 
@@ -951,11 +959,13 @@ class MixingAttention(FlexibleInputNetwork):
         # Z_i = LN(||_j=1->n(MHA(X_i, X_j, X_j)))
         self.MHA = nn.ModuleDict()
         self.LN_Z = nn.ModuleDict()
-        self.Z_dim = sum([d_i for d_i in in_set.values() if config[input_key]['output']])
+        self.Z_dim = sum([d_i for d_i in in_set.values()])
         for input_key in self.input_keys:
             if not config[input_key]['output']:
                 continue
-            self.MHA[input_key] = nn.MultiheadAttention(in_set[input_key], config[input_key]['num_heads'])
+            self.MHA[input_key] = nn.ModuleDict()
+            for j in self.input_keys:
+                self.MHA[input_key][j] = nn.MultiheadAttention(in_set[input_key], config[input_key]['num_heads'])
             self.LN_Z[input_key] = nn.LayerNorm(self.Z_dim)
         
         # A_i = (FF(Z_i)+Z_i)W0_i
@@ -985,7 +995,7 @@ class MixingAttention(FlexibleInputNetwork):
         for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
-            Z[i] = self.LN_Z[i](torch.cat([self.MHA[i](X[i], X[j], X[j])[0] for j in self.input_keys], dim=-1))
+            Z[i] = self.LN_Z[i](torch.cat([self.MHA[i][j](X[i], X[j], X[j])[0] for j in self.input_keys], dim=-1))
         
         # A_i = relu(FF(Z_i)+Z_i)W0_i
         A = {}
