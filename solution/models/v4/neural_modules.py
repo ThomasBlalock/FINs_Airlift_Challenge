@@ -4,12 +4,11 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv
 
-# TODO: make a sorted list of keys to ensure the order of the input set
 
 class FlexibleInputNetwork(nn.Module):
 
     def __init__(self, in_set):
-        super(SelfProjection, self).__init__()
+        super(FlexibleInputNetwork, self).__init__()
         """
         in_set: {
             'x1': embed dim (int),
