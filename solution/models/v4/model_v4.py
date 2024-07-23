@@ -140,14 +140,6 @@ class Encoder(nn.Module):
         for layer in self.cargo_transformer:
             cargo_embeddings = layer(cargo_embeddings)
         
-        # Reshape into (-1 x n x f) if there's only 2 dimensions
-        if len(node_embeddings.shape) == 2:
-            node_embeddings = torch.reshape(node_embeddings, (-1, node_embeddings.shape[0], node_embeddings.shape[1]))
-            plane_embeddings = torch.reshape(plane_embeddings, (-1, plane_embeddings.shape[0], plane_embeddings.shape[1]))
-            cargo_embeddings = torch.reshape(cargo_embeddings, (-1, cargo_embeddings.shape[0], cargo_embeddings.shape[1]))
-
-        print(node_embeddings.shape, plane_embeddings.shape, cargo_embeddings.shape)
-
         return {
             'cargo_embeddings': cargo_embeddings,
             'plane_embeddings': plane_embeddings,
@@ -758,7 +750,7 @@ class PolicyHead(nn.Module):
             if 'cargo' in X:
                 c_c = X['cargo']
         del X
-        cargo_logits = self.ptr_cargo(c_c, p_c, mask=cargo_mask)
+        cargo_logits = self.ptr_cargo(c_c, p_c, mask=cargo_mask, add_choice=True)
         cargo = self.sample(cargo_logits)
 
         return {
@@ -913,7 +905,7 @@ class SelfProjection(FlexibleInputNetwork):
             if not self.config[input_key]['output']:
                 continue
             A[input_key] = F.softmax(torch.reshape(
-                self.MLP_A[input_key](Z), (-1, self.in_set[input_key], self.config[input_key]['d_ia'])), dim=-1)
+                self.MLP_A[input_key](Z), (self.in_set[input_key], self.config[input_key]['d_ia'])), dim=-1)
         
         # out_set_i = relu(FF_i(X_i||X_i*A_i))
         Y = {}
