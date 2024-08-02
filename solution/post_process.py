@@ -9,7 +9,7 @@ def post_process(x, y):
     Post-process the action logits into valid actions.
 
     Args:
-        x: {
+        x: { # Output from the obs preprocessor
             'nodes': {
                 'PyGeom': torch_geometric.data.Data, PyTorch Geometric Data object
                 'nodes': dict of Airports
@@ -26,7 +26,7 @@ def post_process(x, y):
                 'tensor': torch.Tensor, tensor[i] = cargo_i features
                 'mask': torch.Tensor, mask[i, j] = 0 if cargo_i can be loaded onto agent_j, -inf otherwise
         }
-        y: dict of tensors {
+        y: dict of tensors { # Output from the model
             'actions': actions,
             'action_logits': action_logits,
             'destinations': destinations,

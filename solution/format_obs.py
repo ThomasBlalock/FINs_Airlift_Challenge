@@ -2,11 +2,6 @@ import networkx as nx
 import torch
 from torch_geometric.utils import from_networkx
 
-"""
-TODO:
-- plane_key to match planes to cargo
-"""
-
 WAITING = 0
 PROCESSING = 1
 MOVING = 2
@@ -16,11 +11,11 @@ DESTINATION_ACTION = 0
 LOAD_UNLOAD_ACTION = 1
 NOOP_ACTION = 2
 
-def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10000, prev_cargo={}, prev_airplanes={}):
+def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10000, prev_x=None):
     """
     Format the observation into a format that can be used by the model.
     Needs to have the previous timestep's cargo and airplanes to determine cargo's location
-    and airplane's ETA.
+    and airplane's ETA since the env makes loading cargo disappear.
 
     Args:
         obs (dict): observation from the environment
@@ -28,6 +23,7 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
         max_airport_capacity (float): maximum airport capacity for normalization
         max_weight (float): maximum weight for normalization
         max_time (float): maximum time for normalization
+        prev_x (dict): previous timestep's formatted observation
     
     Return: {
         'nodes': {
@@ -47,6 +43,13 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
             'mask': torch.Tensor, mask[i, j] = 0 if cargo_i can be loaded onto agent_j, -inf otherwise
     }
     """
+
+    if prev_x is not None:
+        prev_cargo = prev_x['cargo']['cargo']
+        prev_airplanes = prev_x['agents']['agents']
+    else:
+        prev_cargo = {}
+        prev_airplanes = {}
 
     # Extract the global state
     gs = obs['a_0']['globalstate']

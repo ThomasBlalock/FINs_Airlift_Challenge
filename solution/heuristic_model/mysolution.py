@@ -8,10 +8,11 @@ from airlift.envs.airlift_env import ObservationHelper
 from typing import Optional, Tuple, Dict, List
 
 import networkx as nx
-from solution.common import Leg
+from solution.heuristic_model.common import Leg
 
-from solution.strategic import Model
+from solution.heuristic_model.strategic import Model
 
+VERBOSE = False
 
 class MySolution(Solution):
     """
@@ -145,7 +146,7 @@ class MySolution(Solution):
                         cargo_to_load = []
 
                 priority = self.calculate_priority(plane.get_next_deadline())
-                if len(cargo_to_load) > 0:
+                if len(cargo_to_load) > 0 and VERBOSE:
                     print(
                         f"[{self.current_time}] Loading {cargo_to_load} on {a} at {current_airport} lp {plane.legs[0].lp}"
                     )
@@ -164,9 +165,10 @@ class MySolution(Solution):
                     priority = min(
                         priority, self.calculate_priority(next_cargo_deadline)
                     )
-                    print(
-                        f"[{self.current_time}] Unloading {cargo_to_unload} from {a} at {current_airport} lp {next_cargo_deadline}"
-                    )
+                    if VERBOSE:
+                        print(
+                            f"[{self.current_time}] Unloading {cargo_to_unload} from {a} at {current_airport} lp {next_cargo_deadline}"
+                        )
 
                 actions[a] = {
                     "priority": priority,
@@ -204,14 +206,15 @@ class MySolution(Solution):
                         "cargo_to_unload": [],
                         "destination": ce.destination,
                     }
-                    print(
-                        f"[{self.current_time}] Sending {a} to {destination} for {ce}"
-                    )
+                    if VERBOSE:
+                        print(
+                            f"[{self.current_time}] Sending {a} to {destination} for {ce}"
+                        )
                     for ce in ce_onboard:
                         if ce.destination == destination:
                             # Remove them from legs as they are being executed
                             plane.legs[0].remove(ce)
-                        else:
+                        elif VERBOSE:
                             print(
                                 f"WARNING: plane being dispatched to {destination} with {ce} onboard"
                             )
@@ -250,11 +253,12 @@ class MySolution(Solution):
                                 "cargo_to_unload": [],
                                 "destination": destination,
                             }
-                            print(
-                                f"[{self.current_time}] Sending {a} on {path} to pickup {ce}"
-                            )
+                            if VERBOSE:
+                                print(
+                                    f"[{self.current_time}] Sending {a} on {path} to pickup {ce}"
+                                )
                             break
-                        else:
+                        elif VERBOSE:
                             print(f"WARNING: {a} cannot go on {path} to pickup {ce}")
             if a not in actions:
                 noop_action = ActionHelper.noop_action()

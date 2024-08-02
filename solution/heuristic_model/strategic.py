@@ -2,7 +2,7 @@ from collections import OrderedDict
 import math
 from typing import Dict, Iterable, List, Optional, Tuple
 from airlift.envs.airlift_env import ObservationHelper
-from solution.common import (
+from solution.heuristic_model.common import (
     CargoEdge,
     CargoEdges,
     Leg,

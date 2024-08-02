@@ -127,6 +127,9 @@ class Encoder(nn.Module):
         node_embeddings, edge_index, edge_attr =\
             node_embeddings.x, node_embeddings.edge_index, node_embeddings.edge_attr
         node_embeddings = self.up_projection_n(node_embeddings)
+        if torch.isnan(node_embeddings[0][0]).item():
+            print(x)
+            print(self.up_projection_n)
         for layer in self.GAT:
             node_embeddings = layer(node_embeddings, edge_index, edge_attr)
         
@@ -652,24 +655,14 @@ class PolicyHead(nn.Module):
         })
 
 
-    def sample(self, logits, mask=None):
+    def sample(self, logits):
         """
         Args:
             logits: tensor (p x n) probabilities
-            mask: additive mask
 
-        Returns: {
-            actions: tensor (p x n) one-hot encoded actions
-            action_logits: tensor (p x n) log probabilities
-            destinations: tensor (p x n) one-hot encoded destinations
-            destination_logits: tensor (p x n) log probabilities
-            cargo: tensor (p x n) one-hot encoded cargo
-            cargo_logits: tensor (p x n) log probabilities
-        }
+        Returns: tensor (p x n) one-hot encoded samples
         """
 
-        if mask is not None:
-            logits = logits + mask
         return F.gumbel_softmax(logits, tau=1.0, hard=True, dim=-1).detach()
 
     def update_masks(self, actions, destination_mask, cargo_mask):
@@ -710,7 +703,8 @@ class PolicyHead(nn.Module):
         del X
         action_logits = self.transformer_action(p_a)
         action_logits = self.down_projection_action(action_logits)
-        actions = self.sample(action_logits, mask=action_mask)
+        action_logits = action_logits + action_mask
+        actions = self.sample(action_logits)
 
         # Update Masks
         if action_mask is not None:
@@ -752,6 +746,10 @@ class PolicyHead(nn.Module):
         del X
         cargo_logits = self.ptr_cargo(c_c, p_c, mask=cargo_mask, add_choice=True)
         cargo = self.sample(cargo_logits)
+
+        action_logits = nn.Softmax(dim=-1)(action_logits)
+        destination_logits = nn.Softmax(dim=-1)(destination_logits)
+        cargo_logits = nn.Softmax(dim=-1)(cargo_logits)
 
         return {
             'actions': actions,

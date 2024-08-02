@@ -1,26 +1,29 @@
 from airlift.solutions import Solution
 from airlift.envs import ActionHelper
 from solution.format_obs import format_obs
-from solution.models.v2.model_v2 import Policy, get_config
 from solution.post_process import post_process
 import random
 import torch
 
-""" TODO Block
-
-"""
 
 class MySolution(Solution):
     """
     Utilizing this class for your solution is required for your submission. The primary solution algorithm will go inside the
     policy function.
     """
-    def __init__(self, policy_path='solution/models/v2/v2_episode_30_pi.pth', seed=None):
+    def __init__(self, pi, seed=None):
         super().__init__()
 
         self.seed = seed
-        self.model = Policy(get_config('v1')['policy'])
-        self.model.load_state_dict(torch.load(policy_path))
+        self.model = pi
+        # self.model.load_state_dict(torch.load(policy_path))
+        self.t = 0
+        self.prev_cargo = {}
+        self.prev_airplanes = {}
+    
+    def reset(self):
+        self.prev_cargo = {}
+        self.prev_airplanes = {}
         self.t = 0
 
 
@@ -33,7 +36,7 @@ class MySolution(Solution):
                     print(w['warnings'])
 
         # Format obs into tensors, incriment timestep
-        x = format_obs(obs, self.t)
+        x = format_obs(obs, self.t, prev_cargo=self.prev_cargo, prev_airplanes=self.prev_airplanes)
         self.t += 1
 
         # Obtain the actions from the model
