@@ -108,6 +108,16 @@ class Encoder(nn.Module):
         }
         """
 
+        # Format into a batch if only 2 dimensions
+        if not isinstance(x['nodes']['PyGeom'], list):
+            x['nodes']['PyGeom'] = [x['nodes']['PyGeom']]
+            x['nodes']['PyGeom'] = x['nodes']['PyGeom'].to('cuda')
+        if len(x['agents']['tensor'].shape) == 2:
+            x['agents']['tensor'] = x['agents']['tensor'].unsqueeze(0)
+        if len(x['cargo']['tensor'].shape) == 2:
+            x['cargo']['tensor'] = x['cargo']['tensor'].unsqueeze(0)
+
+
         # Validate the input
         assert 'nodes' in x, 'nodes not found in the input'
         assert 'agents' in x, 'agents not found in the input'
@@ -115,8 +125,8 @@ class Encoder(nn.Module):
         assert 'PyGeom' in x['nodes'], 'PyGeom object not found in the input'
         assert 'tensor' in x['agents'], 'agents tensor not found in the input'
         assert 'tensor' in x['cargo'], 'cargo tensor not found in the input'
-        assert x['agents']['tensor'].shape[1] == self.config['agents']['in_dim'], 'agents tensor has incorrect shape'
-        assert x['cargo']['tensor'].shape[1] == self.config['cargo']['in_dim'], 'cargo tensor has incorrect shape'
+        assert x['agents']['tensor'].shape[2] == self.config['agents']['in_dim'], 'agents tensor has incorrect shape'
+        assert x['cargo']['tensor'].shape[2] == self.config['cargo']['in_dim'], 'cargo tensor has incorrect shape'
 
         # Unpack the input
         node_embeddings = x['nodes']['PyGeom']
@@ -124,14 +134,19 @@ class Encoder(nn.Module):
         cargo_embeddings = x['cargo']['tensor']
 
         # Embed Nodes
-        node_embeddings, edge_index, edge_attr =\
-            node_embeddings.x, node_embeddings.edge_index, node_embeddings.edge_attr
-        node_embeddings = self.up_projection_n(node_embeddings)
-        if torch.isnan(node_embeddings[0][0]).item():
-            print(x)
-            print(self.up_projection_n)
-        for layer in self.GAT:
-            node_embeddings = layer(node_embeddings, edge_index, edge_attr)
+        node_embeddings_GAT = []
+        for i in range(len(node_embeddings)):
+            node_mtx, edge_index, edge_attr =\
+                node_embeddings[i].x, node_embeddings[i].edge_index,\
+                    node_embeddings[i].edge_attr
+            node_mtx = self.up_projection_n(node_mtx)
+            if torch.isnan(node_mtx[0][0]).item():
+                print(x)
+                print(self.up_projection_n)
+            for layer in self.GAT:
+                node_mtx = layer(node_mtx, edge_index, edge_attr)
+            node_embeddings_GAT.append(node_mtx)
+        node_embeddings = torch.stack(node_embeddings_GAT, dim=0)
         
         # Embed Planes
         plane_embeddings = self.up_projection_a(plane_embeddings)
@@ -668,16 +683,17 @@ class PolicyHead(nn.Module):
     def update_masks(self, actions, destination_mask, cargo_mask):
 
         cargo_mask = cargo_mask.T
-        for plane, action in enumerate(actions):
-            action_id = action.argmax().item()
-            if action_id != DESTINATION_ACTION:
-                destination_mask[plane] = torch.tensor(
-                    [-float('inf')]*destination_mask.shape[1])
-            if action_id != LOAD_UNLOAD_ACTION:
-                cargo_mask[plane] = torch.tensor(
-                    [-float('inf')]*cargo_mask.shape[1])
+        for batch in range(len(actions)):
+            for plane, action in enumerate(actions):
+                action_id = action.argmax().item()
+                if action_id != DESTINATION_ACTION:
+                    destination_mask[batch][plane] = torch.tensor(
+                        [-float('inf')]*destination_mask.shape[1])
+                if action_id != LOAD_UNLOAD_ACTION:
+                    cargo_mask[plane] = torch.tensor(
+                        [-float('inf')]*cargo_mask.shape[1])
 
-        return destination_mask, cargo_mask.T
+        return destination_mask, torch.transpose(cargo_mask, 1, 2)
 
     def forward(self, n, p, c, action_mask=None, destination_mask=None, cargo_mask=None):
         """
@@ -686,9 +702,16 @@ class PolicyHead(nn.Module):
             action_mask: additive mask for action head
             destination_mask: additive mask for destination head
             cargo_mask: additive mask for cargo head
-
-
         """
+
+        # Validate Input
+        assert action_mask is None or action_mask.shape == (p.shape[0], p.shape[1], n.shape[1]), 'action_mask has incorrect shape'
+        assert destination_mask is None or destination_mask.shape == (p.shape[0], p.shape[1], n.shape[1]), 'destination_mask has incorrect shape'
+        assert cargo_mask is None or cargo_mask.shape == (c.shape[0], c.shape[1], p.shape[1]+1), 'cargo_mask has incorrect shape'
+        assert n.shape[0] == p.shape[0] == c.shape[0], 'batch size mismatch'
+        assert n.shape[2] == self.config['nodes_in_dim'], 'node embeddings have incorrect dimension'
+        assert p.shape[2] == self.config['agents_in_dim'], 'plane embeddings have incorrect dimension'
+        assert c.shape[2] == self.config['cargo_in_dim'], 'cargo embeddings have incorrect dimension'
 
         # Action Head
         n_a, p_a, c_a = n, p, c
@@ -729,7 +752,7 @@ class PolicyHead(nn.Module):
         del X
 
         # Cargo Head
-        aug_n = torch.matmul(destinations.T, self.augmentation['nodes'](p_d))
+        aug_n = torch.matmul(torch.transpose(destinations, 1, 2), self.augmentation['nodes'](p_d))
         aug_p = torch.matmul(destinations, self.augmentation['agents'](n_d))
         n_c = self.down_projection_cargo['nodes'](torch.cat((n, n_d, aug_n), dim=-1))
         p_c = self.down_projection_cargo['agents'](torch.cat((p, p_d, aug_p, actions), dim=-1))
@@ -891,10 +914,10 @@ class SelfProjection(FlexibleInputNetwork):
     def forward(self, X):
 
         # Z = vec(||_i=1->N(X_i*W_i1).T * (X_i*W_i)2)
-        Z = torch.cat([torch.matmul(torch.matmul(X[input_key], self.W_Z[input_key][0]).T,\
+        Z = torch.cat([torch.bmm(torch.matmul(X[input_key], self.W_Z[input_key][0]).permute(0, 2, 1),\
                         torch.matmul(X[input_key], self.W_Z[input_key][1]))
                        for input_key in self.input_keys], dim=-1)
-        Z = torch.reshape(Z, (-1, self.Z_dim))
+        Z = torch.reshape(Z, (Z.shape[0], self.Z_dim))
         Z = self.config['non_linearity'](Z)
 
         # A_i = softmax(mat(MLP(Z), d_i, d_ia), across columns)
@@ -903,7 +926,7 @@ class SelfProjection(FlexibleInputNetwork):
             if not self.config[input_key]['output']:
                 continue
             A[input_key] = F.softmax(torch.reshape(
-                self.MLP_A[input_key](Z), (self.in_set[input_key], self.config[input_key]['d_ia'])), dim=-1)
+                self.MLP_A[input_key](Z), (Z.shape[0], self.in_set[input_key], self.config[input_key]['d_ia'])), dim=-1)
         
         # out_set_i = relu(FF_i(X_i||X_i*A_i))
         Y = {}
@@ -982,10 +1005,13 @@ class MixingAttention(FlexibleInputNetwork):
 
         # Z_i = LN(||_j=1->n(MHA(X_i, X_j, X_j)))
         Z = {}
+
         for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
-            Z[i] = self.LN_Z[i](torch.cat([self.MHA[i][j](X[i], X[j], X[j])[0] for j in self.input_keys], dim=-1))
+            Z[i] = self.LN_Z[i](torch.cat([
+                self.MHA[i][j](X[i].permute(1, 0, 2), X[j].permute(1, 0, 2),X[j].permute(1, 0, 2))[0]\
+                    .permute(1, 0, 2) for j in self.input_keys], dim=-1))
         
         # A_i = relu(FF(Z_i)+Z_i)W0_i
         A = {}
@@ -1048,7 +1074,7 @@ class Ptr(nn.Module):
         yc = self.Wy(y)
 
         # ptr = softmax((xc * ycT) / sqrt(d_k))
-        ptr_mtx = torch.matmul(xc, yc.T) / xc.size(-1)**0.5
+        ptr_mtx = torch.matmul(xc, torch.transpose(yc, 1, 2)) / xc.size(-1)**0.5
 
         # Add a NOOP choice if needed
         if add_choice:
@@ -1098,8 +1124,13 @@ class TransformerLayer(nn.Module):
             k = q
         if v is None:
             v = q
-
+        q = q.permute(1, 0, 2)
+        k = k.permute(1, 0, 2)
+        v = v.permute(1, 0, 2)
         v, _ = self.attention(q, k, v)
+        q = q.permute(1, 0, 2)
+        k = k.permute(1, 0, 2)
+        v = v.permute(1, 0, 2)
         v = self.norm1(v + q)
         v = self.norm2(v + self.ff(v))
 

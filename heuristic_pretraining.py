@@ -175,7 +175,7 @@ class Scheduler:
         return env
 
 
-    def next(self):
+    def next(self, stage):
         """
         Returns the environment and epsilon for the next episode
         """
@@ -183,7 +183,6 @@ class Scheduler:
         # Decide environment type
         env = self.small_env_with_purturbations()
 
-        self.episode += 1
         return env
 
 
@@ -226,6 +225,42 @@ def heuristic_action_to_tensor(actions, x):
     }
 
 
+def stack_nested_dicts(dict_list):
+    if not dict_list:
+        return {}
+    
+    result = {}
+    for key in dict_list[0].keys():
+        if isinstance(dict_list[0][key], dict):
+            result[key] = stack_nested_dicts([d[key] for d in dict_list])
+        elif isinstance(dict_list[0][key], torch.Tensor):
+            result[key] = torch.stack([d[key] for d in dict_list])
+        else:
+            result[key] = [d[key] for d in dict_list]
+    
+    return result
+
+
+def calculate_batch_loss(pi, criterion, x_batch, target_batch):
+    y_batch = pi(x_batch)
+    
+    action_loss = criterion(y_batch['actions'].view(-1, 3), target_batch['actions'].view(-1, 3))
+    
+    # Mask for destination and cargo actions
+    dest_mask = (target_batch['actions'][:, :, 0] == 1).view(-1)
+    cargo_mask = (target_batch['actions'][:, :, 1] == 1).view(-1)
+    
+    destination_loss = criterion(y_batch['destinations'].view(-1, x_batch['nodes']['tensor'].shape[1])[dest_mask], 
+                                 target_batch['destinations'].view(-1, x_batch['nodes']['tensor'].shape[1])[dest_mask])
+    
+    cargo_loss = criterion(y_batch['cargo'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask], 
+                           target_batch['cargo'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask])
+    
+    total_loss = action_loss + destination_loss + cargo_loss
+    return total_loss
+
+
+
 def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per_minibatch=32, num_envs=4, seed=0):
     """
     This function is responsible for pretraining the agent using a heuristic solution.
@@ -248,6 +283,7 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
     # Training Loop
     for epoch in range(epochs):
         print(f"Epoch {epoch+1}/{epochs}")
+        epoch_loss = 0
 
         envs = [scheduler.next(epoch) for _ in range(num_envs)]
         xs = [None for _ in range(num_envs)]
@@ -257,6 +293,8 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
         
         for batch in tqdm(range(num_batches)):
             losses = [0 for _ in range(num_envs)]
+            x_batch = []
+            y_batch = []
 
             # Env Loop
             for env_id in range(num_envs):
@@ -274,80 +312,79 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                     y = pi(x)
                     for p in range(x['agents']['tensor'].shape[0]):
                         if torch.isnan(y['actions'][p][0]).item():
-                            print("1111111111111111111111111111111111111111111111111")
-                            print(x)
-                            print("11111111111111111111111111111111111111111111111111111111111111")
-                            break
+                            raise ValueError('NaN in action logits')
                     actions = post_process(x, y)
                     target_actions = h[env_id].policies(ob, None, None)
                     targets = heuristic_action_to_tensor(target_actions, x)
 
-                    # Calculate Loss
-                    h_cargo_selections = [False for _ in range(x['cargo']['tensor'].shape[0])]
-                    for plane_idx in range(x['agents']['tensor'].shape[0]):
-                        loss = criterion(y['action_logits'][plane_idx], targets['actions'][plane_idx])\
-                            / (timesteps_per_minibatch * num_envs)
-                        losses[env_id] += loss
+                    x_batch.append(x)
+                    y_batch.append(targets)
 
-                        action_type = torch.argmax(y['actions'][plane_idx]).item()
-                        h_action_type = torch.argmax(targets['actions'][plane_idx]).item()
+                    # # Calculate Loss
+                    # h_cargo_selections = [False for _ in range(x['cargo']['tensor'].shape[0])]
+                    # for plane_idx in range(x['agents']['tensor'].shape[0]):
+                    #     loss = criterion(y['action_logits'][plane_idx], targets['actions'][plane_idx])\
+                    #         / (timesteps_per_minibatch * num_envs)
+                    #     losses[env_id] += loss
 
-                        # Loss for Destination only if both actions are destination actions
-                        if action_type == DESTINATION_ACTION and h_action_type == DESTINATION_ACTION:
-                            loss = criterion(y['destination_logits'][plane_idx], targets['destinations'][plane_idx])\
-                                / (timesteps_per_minibatch * num_envs)
-                            # check is loss is NaN
-                            if torch.isnan(loss).item():
-                                print(t, plane_idx, y['destination_logits'], targets['destinations'], y['actions'], targets['actions'])
-                                with open('ob.pkl', 'wb') as f:
-                                    pickle.dump(ob, f)
-                                raise ValueError('Loss is NaN on Destinations')
+                    #     action_type = torch.argmax(y['actions'][plane_idx]).item()
+                    #     h_action_type = torch.argmax(targets['actions'][plane_idx]).item()
 
-                            losses[env_id] += loss
+                    #     # Loss for Destination only if both actions are destination actions
+                    #     if action_type == DESTINATION_ACTION and h_action_type == DESTINATION_ACTION:
+                    #         loss = criterion(y['destination_logits'][plane_idx], targets['destinations'][plane_idx])\
+                    #             / (timesteps_per_minibatch * num_envs)
+                    #         # check is loss is NaN
+                    #         if torch.isnan(loss).item():
+                    #             with open('ob.pkl', 'wb') as f:
+                    #                 pickle.dump(ob, f)
+                    #             raise ValueError('Loss is NaN on Destinations')
+
+                    #         losses[env_id] += loss
                         
-                        # Loss for Cargo only if both actions are load/unload actions
-                        elif action_type == LOAD_UNLOAD_ACTION and h_action_type == LOAD_UNLOAD_ACTION:
-                            for cargo_idx in range(x['cargo']['tensor'].shape[0]):
-                                h_cargo_selections[cargo_idx] = True
+                    #     # Loss for Cargo only if both actions are load/unload actions
+                    #     elif action_type == LOAD_UNLOAD_ACTION and h_action_type == LOAD_UNLOAD_ACTION:
+                    #         for cargo_idx in range(x['cargo']['tensor'].shape[0]):
+                    #             h_cargo_selections[cargo_idx] = True
                     
-                    # Loss for Cargo only if both actions are load/unload actions
-                    for cargo_idx in range(x['cargo']['tensor'].shape[0]):
-                        if h_cargo_selections[cargo_idx]:
-                            loss = criterion(y['cargo_logits'][cargo_idx], targets['cargo'][cargo_idx])\
-                                / (timesteps_per_minibatch * num_envs)
-                            if torch.isnan(loss).item():
-                                #pickle x
-                                print(t)
-                                print(y['cargo_logits'][cargo_idx], targets['cargo'][cargo_idx])
-                                with open('ob.pkl', 'wb') as f:
-                                    pickle.dump(ob, f)
-                                raise ValueError('Loss is NaN on Destinations')
-                            losses[env_id] += loss
+                    # # Loss for Cargo only if both actions are load/unload actions
+                    # for cargo_idx in range(x['cargo']['tensor'].shape[0]):
+                    #     if h_cargo_selections[cargo_idx]:
+                    #         loss = criterion(y['cargo_logits'][cargo_idx], targets['cargo'][cargo_idx])\
+                    #             / (timesteps_per_minibatch * num_envs)
+                    #         if torch.isnan(loss).item():
+                    #             with open('ob.pkl', 'wb') as f:
+                    #                 pickle.dump(ob, f)
+                    #             raise ValueError('Loss is NaN on Cargo')
+                    #         losses[env_id] += loss
 
                     # Step Env
-                    ob, rews, dones, infos = env.step(actions=actions)
+                    ob, _, dones, _ = env.step(actions=actions)
 
                     # If done, get new environment
-                    done = True
-                    for _, d in dones.items():
-                        if not d:
-                            done = False
-                            break
-                    if done:
+                    if all(dones.values()):
                         envs[env_id] = scheduler.next(epoch)
                         ob = envs[env_id].reset(seed=seed)
                         h[env_id].reset(ob)
                 
                 obs[env_id] = ob
             
+            x_batch = stack_nested_dicts(x_batch)
+            y_batch = stack_nested_dicts(y_batch)
+            total_loss = calculate_batch_loss(pi, criterion, x_batch, y_batch)
+
             # Backward Pass
-            total_loss = torch.stack(losses).sum()
             optim.zero_grad()
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(pi.parameters(), max_norm=1.0)
             optim.step()
         
-            print(f"Loss: {total_loss.item()}")
+            epoch_loss += total_loss.item()
+            print(f"Batch Loss: {total_loss.item()}")
+        
+        avg_epoch_loss = epoch_loss / num_batches
+        print(f"Epoch {epoch+1} Average Loss: {avg_epoch_loss}")
+        scheduler.step(avg_epoch_loss)
         
         # Save the model for each epoch
         pth = 'solution/models/v4/v4_epoch-'+str(epoch)+'_pi.pth'

@@ -41,7 +41,7 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
             'cargo': dict of Cargo objects, 
             'tensor': torch.Tensor, tensor[i] = cargo_i features
             'mask': torch.Tensor, mask[i, j] = 0 if cargo_i can be loaded onto agent_j, -inf otherwise
-    }
+        }
     """
 
     if prev_x is not None:
@@ -217,21 +217,21 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
 
     return {
         'nodes': {
-            'PyGeom': torch_gr,
+            'PyGeom': [torch_gr],
             'nodes': airport_list,    
         },
         'agents': {
             'map': agents_map,
             'agents': airplane_list.airplanes,
-            'tensor': agents_tensor,
-            'destination_mask': agents_mask,
-            'action_mask': action_mask
+            'tensor': agents_tensor.unsqueeze(0),
+            'destination_mask': agents_mask.unsqueeze(0),
+            'action_mask': action_mask.unsqueeze(0)
         },
         'cargo': {
             'map': cargo_map,
             'cargo': cargo_list.cargo,
-            'tensor': cargo_tensor,
-            'mask': cargo_mask
+            'tensor': cargo_tensor.unsqueeze(0),
+            'mask': cargo_mask.unsqueeze(0)
         }
     }
 
