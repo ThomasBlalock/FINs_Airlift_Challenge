@@ -218,7 +218,7 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
     return {
         'nodes': {
             'PyGeom': [torch_gr],
-            'nodes': airport_list,    
+            'nodes': airport_list,
         },
         'agents': {
             'map': agents_map,
