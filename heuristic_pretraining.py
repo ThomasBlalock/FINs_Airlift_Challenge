@@ -33,6 +33,7 @@ from torch.distributions import Categorical
 from tqdm import tqdm
 import networkx as nx
 import pickle
+from torch_geometric.data import Data
 
 DESTINATION_ACTION = 0
 LOAD_UNLOAD_ACTION = 1
@@ -61,7 +62,7 @@ class Scheduler:
 
         # Decide airport generator
         airport_generator = RandomAirportGenerator(
-            max_airports=3,
+            max_airports=5,
             make_drop_off_area=True,
             make_pick_up_area=True,
             num_drop_off_airports=1,
@@ -230,11 +231,18 @@ def stack_nested_dicts(dict_list):
         return {}
     
     result = {}
+    result['nodes'] = {}
+    # result['nodes']['PyGeom'] = []
     for key in dict_list[0].keys():
         if isinstance(dict_list[0][key], dict):
             result[key] = stack_nested_dicts([d[key] for d in dict_list])
         elif isinstance(dict_list[0][key], torch.Tensor):
             result[key] = torch.stack([d[key] for d in dict_list])
+            if result[key].dim() == 4:
+                result[key] = torch.reshape(result[key], (result[key].shape[0], result[key].shape[2], result[key].shape[3]))
+        elif isinstance(dict_list[0][key], list) and isinstance(dict_list[0][key][0], Data):
+            result[key] = [d[key][0] for d in dict_list]
+            # TODO: Fix this. It generates a [[PyGeom], [Pygeom]] when it should be [PyGeom, PyGeom]
         else:
             result[key] = [d[key] for d in dict_list]
     
@@ -311,7 +319,7 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                     xs[env_id] = x
                     y = pi(x)
                     for p in range(x['agents']['tensor'].shape[0]):
-                        if torch.isnan(y['actions'][p][0]).item():
+                        if torch.isnan(y['actions'][p][0][0]).item():
                             raise ValueError('NaN in action logits')
                     actions = post_process(x, y)
                     target_actions = h[env_id].policies(ob, None, None)
@@ -368,7 +376,6 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                         h[env_id].reset(ob)
                 
                 obs[env_id] = ob
-            
             x_batch = stack_nested_dicts(x_batch)
             y_batch = stack_nested_dicts(y_batch)
             total_loss = calculate_batch_loss(pi, criterion, x_batch, y_batch)

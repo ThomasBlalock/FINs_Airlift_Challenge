@@ -125,7 +125,11 @@ class Encoder(nn.Module):
         assert 'PyGeom' in x['nodes'], 'PyGeom object not found in the input'
         assert 'tensor' in x['agents'], 'agents tensor not found in the input'
         assert 'tensor' in x['cargo'], 'cargo tensor not found in the input'
-        assert x['agents']['tensor'].shape[2] == self.config['agents']['in_dim'], 'agents tensor has incorrect shape'
+        try:
+            assert x['agents']['tensor'].shape[2] == self.config['agents']['in_dim'], 'agents tensor has incorrect shape'
+        except:
+            print(x['agents']['tensor'].shape)
+            print(self.config['agents']['in_dim'])
         assert x['cargo']['tensor'].shape[2] == self.config['cargo']['in_dim'], 'cargo tensor has incorrect shape'
 
         # Unpack the input
@@ -135,6 +139,8 @@ class Encoder(nn.Module):
 
         # Embed Nodes
         node_embeddings_GAT = []
+        if isinstance(node_embeddings[0], list):
+            print(node_embeddings)
         for i in range(len(node_embeddings)):
             node_mtx, edge_index, edge_attr =\
                 node_embeddings[i].x, node_embeddings[i].edge_index,\
@@ -682,16 +688,16 @@ class PolicyHead(nn.Module):
 
     def update_masks(self, actions, destination_mask, cargo_mask):
 
-        cargo_mask = cargo_mask.T
+        cargo_mask = torch.transpose(cargo_mask, 1, 2)
         for batch in range(len(actions)):
-            for plane, action in enumerate(actions):
+            for plane, action in enumerate(actions[batch]):
                 action_id = action.argmax().item()
                 if action_id != DESTINATION_ACTION:
-                    destination_mask[batch][plane] = torch.tensor(
-                        [-float('inf')]*destination_mask.shape[1])
+                    destination_mask[batch, plane] = torch.tensor(
+                        [-float('inf')]*destination_mask.shape[2])
                 if action_id != LOAD_UNLOAD_ACTION:
-                    cargo_mask[plane] = torch.tensor(
-                        [-float('inf')]*cargo_mask.shape[1])
+                    cargo_mask[batch, plane] = torch.tensor(
+                        [-float('inf')]*cargo_mask.shape[2])
 
         return destination_mask, torch.transpose(cargo_mask, 1, 2)
 
@@ -705,7 +711,7 @@ class PolicyHead(nn.Module):
         """
 
         # Validate Input
-        assert action_mask is None or action_mask.shape == (p.shape[0], p.shape[1], n.shape[1]), 'action_mask has incorrect shape'
+        assert action_mask is None or action_mask.shape == (p.shape[0], p.shape[1], 3), 'action_mask has incorrect shape'
         assert destination_mask is None or destination_mask.shape == (p.shape[0], p.shape[1], n.shape[1]), 'destination_mask has incorrect shape'
         assert cargo_mask is None or cargo_mask.shape == (c.shape[0], c.shape[1], p.shape[1]+1), 'cargo_mask has incorrect shape'
         assert n.shape[0] == p.shape[0] == c.shape[0], 'batch size mismatch'
@@ -1079,7 +1085,7 @@ class Ptr(nn.Module):
         # Add a NOOP choice if needed
         if add_choice:
             ptr_mtx = torch.cat(
-                (ptr_mtx, torch.zeros(ptr_mtx.size(0), 1)), dim=-1)
+                (ptr_mtx, torch.zeros(ptr_mtx.size(0), ptr_mtx.size(1), 1)), dim=-1)
 
         if mask is not None:
             ptr_mtx = ptr_mtx + mask

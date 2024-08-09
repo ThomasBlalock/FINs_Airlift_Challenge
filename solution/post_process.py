@@ -38,11 +38,15 @@ def post_process(x, y):
     returns: actions: (dict) {agent: action, ...},
     """
 
+    y['actions'] = y['actions'][0]
+    y['destinations'] = y['destinations'][0]
+    y['cargo'] = y['cargo'][0]
+
     y['cargo'] = y['cargo'].T
     actions = {}
     num_planes = x['agents']['tensor'].shape[0]
     
-    for p in range(x['agents']['tensor'].shape[0]):
+    for p in range(x['agents']['tensor'].shape[1]):
         agent_id = x['agents']['map'][p]
         action_type = torch.argmax(y['actions'][p]).item()
 
