@@ -242,7 +242,6 @@ def stack_nested_dicts(dict_list):
                 result[key] = torch.reshape(result[key], (result[key].shape[0], result[key].shape[2], result[key].shape[3]))
         elif isinstance(dict_list[0][key], list) and isinstance(dict_list[0][key][0], Data):
             result[key] = [d[key][0] for d in dict_list]
-            # TODO: Fix this. It generates a [[PyGeom], [Pygeom]] when it should be [PyGeom, PyGeom]
         else:
             result[key] = [d[key] for d in dict_list]
     
@@ -252,16 +251,20 @@ def stack_nested_dicts(dict_list):
 def calculate_batch_loss(pi, criterion, x_batch, target_batch):
     y_batch = pi(x_batch)
     
-    action_loss = criterion(y_batch['actions'].view(-1, 3), target_batch['actions'].view(-1, 3))
+    action_loss = criterion(y_batch['action_logits'].view(-1, 3), target_batch['actions'].view(-1, 3))
     
     # Mask for destination and cargo actions
     dest_mask = (target_batch['actions'][:, :, 0] == 1).view(-1)
-    cargo_mask = (target_batch['actions'][:, :, 1] == 1).view(-1)
-    
-    destination_loss = criterion(y_batch['destinations'].view(-1, x_batch['nodes']['tensor'].shape[1])[dest_mask], 
-                                 target_batch['destinations'].view(-1, x_batch['nodes']['tensor'].shape[1])[dest_mask])
-    
-    cargo_loss = criterion(y_batch['cargo'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask], 
+    cargo_mask = (target_batch['actions'][:, :, 1] == 1)
+    cargo_mask_new = []
+    for i in range(cargo_mask.shape[0]):
+        for j in range(y_batch['cargo'].shape[1]):
+            cargo_mask_new.append([cargo_mask[i].tolist() + [1]])
+    cargo_mask = torch.tensor(cargo_mask_new).view(-1, x_batch['agents']['tensor'].shape[1] + 1)
+
+    destination_loss = criterion(y_batch['destination_logits'].view(-1, x_batch['nodes']['PyGeom'][0].x.shape[0])[dest_mask], 
+                                 target_batch['destinations'].view(-1, x_batch['nodes']['PyGeom'][0].x.shape[0])[dest_mask])
+    cargo_loss = criterion(y_batch['cargo_logits'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask], 
                            target_batch['cargo'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask])
     
     total_loss = action_loss + destination_loss + cargo_loss
@@ -327,44 +330,6 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
 
                     x_batch.append(x)
                     y_batch.append(targets)
-
-                    # # Calculate Loss
-                    # h_cargo_selections = [False for _ in range(x['cargo']['tensor'].shape[0])]
-                    # for plane_idx in range(x['agents']['tensor'].shape[0]):
-                    #     loss = criterion(y['action_logits'][plane_idx], targets['actions'][plane_idx])\
-                    #         / (timesteps_per_minibatch * num_envs)
-                    #     losses[env_id] += loss
-
-                    #     action_type = torch.argmax(y['actions'][plane_idx]).item()
-                    #     h_action_type = torch.argmax(targets['actions'][plane_idx]).item()
-
-                    #     # Loss for Destination only if both actions are destination actions
-                    #     if action_type == DESTINATION_ACTION and h_action_type == DESTINATION_ACTION:
-                    #         loss = criterion(y['destination_logits'][plane_idx], targets['destinations'][plane_idx])\
-                    #             / (timesteps_per_minibatch * num_envs)
-                    #         # check is loss is NaN
-                    #         if torch.isnan(loss).item():
-                    #             with open('ob.pkl', 'wb') as f:
-                    #                 pickle.dump(ob, f)
-                    #             raise ValueError('Loss is NaN on Destinations')
-
-                    #         losses[env_id] += loss
-                        
-                    #     # Loss for Cargo only if both actions are load/unload actions
-                    #     elif action_type == LOAD_UNLOAD_ACTION and h_action_type == LOAD_UNLOAD_ACTION:
-                    #         for cargo_idx in range(x['cargo']['tensor'].shape[0]):
-                    #             h_cargo_selections[cargo_idx] = True
-                    
-                    # # Loss for Cargo only if both actions are load/unload actions
-                    # for cargo_idx in range(x['cargo']['tensor'].shape[0]):
-                    #     if h_cargo_selections[cargo_idx]:
-                    #         loss = criterion(y['cargo_logits'][cargo_idx], targets['cargo'][cargo_idx])\
-                    #             / (timesteps_per_minibatch * num_envs)
-                    #         if torch.isnan(loss).item():
-                    #             with open('ob.pkl', 'wb') as f:
-                    #                 pickle.dump(ob, f)
-                    #             raise ValueError('Loss is NaN on Cargo')
-                    #         losses[env_id] += loss
 
                     # Step Env
                     ob, _, dones, _ = env.step(actions=actions)
