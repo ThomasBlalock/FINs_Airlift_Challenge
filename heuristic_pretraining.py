@@ -354,7 +354,7 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
             # Backward Pass
             optim.zero_grad()
             total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(pi.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(pi.parameters(), max_norm=1.0)
             optim.step()
         
             epoch_loss += total_loss.item()

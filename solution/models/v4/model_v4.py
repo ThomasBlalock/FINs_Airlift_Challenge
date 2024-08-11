@@ -683,23 +683,27 @@ class PolicyHead(nn.Module):
 
         Returns: tensor (p x n) one-hot encoded samples
         """
-
-        return F.gumbel_softmax(logits, tau=1.0, hard=True, dim=-1).detach()
+        non_zero_mask = logits.abs().sum(dim=2, keepdim=True) != 0
+        sampled = F.gumbel_softmax(logits, tau=1.0, hard=True, dim=2).detach()
+        return torch.where(non_zero_mask, sampled, torch.zeros_like(logits))
 
     def update_masks(self, actions, destination_mask, cargo_mask):
 
-        cargo_mask = torch.transpose(cargo_mask, 1, 2)
-        for batch in range(len(actions)):
-            for plane, action in enumerate(actions[batch]):
-                action_id = action.argmax().item()
-                if action_id != DESTINATION_ACTION:
-                    destination_mask[batch, plane] = torch.tensor(
-                        [-float('inf')]*destination_mask.shape[2])
-                if action_id != LOAD_UNLOAD_ACTION:
-                    cargo_mask[batch, plane] = torch.tensor(
-                        [-float('inf')]*cargo_mask.shape[2])
+        actions = actions.argmax(dim=-1)
 
-        return destination_mask, torch.transpose(cargo_mask, 1, 2)
+        # Update Destination Mask
+        destination_action_mask = torch.where(actions == DESTINATION_ACTION, torch.tensor(float('-inf')), torch.tensor(float(0)))
+        destination_action_mask = destination_action_mask.unsqueeze(-1).expand(-1, -1, destination_mask.shape[-1])
+        destination_mask = destination_mask + destination_action_mask
+
+        # Update Cargo Mask
+        cargo_action_mask = torch.where(actions == LOAD_UNLOAD_ACTION, torch.tensor(float('-inf')), torch.tensor(float(0)))
+        cargo_action_mask = torch.tensor([y+[0] for y in cargo_action_mask.tolist()])
+        cargo_action_mask = cargo_action_mask.unsqueeze(-1).expand(-1, -1, cargo_mask.shape[1])
+        cargo_action_mask = cargo_action_mask.permute(0, 2, 1)
+        cargo_mask = cargo_mask + cargo_action_mask
+
+        return destination_mask, cargo_mask
 
     def forward(self, n, p, c, action_mask=None, destination_mask=None, cargo_mask=None):
         """
@@ -733,12 +737,14 @@ class PolicyHead(nn.Module):
         action_logits = self.transformer_action(p_a)
         action_logits = self.down_projection_action(action_logits)
         action_logits = action_logits + action_mask
+        action_logits = nn.Softmax(dim=-1)(action_logits)
         actions = self.sample(action_logits)
 
         # Update Masks
-        if action_mask is not None:
-            destination_mask, cargo_mask = self.update_masks(
-                actions, destination_mask, cargo_mask)
+        destination_mask, cargo_mask = self.update_masks(
+            actions, destination_mask, cargo_mask)
+        print(destination_mask)
+        print(cargo_mask)
             
         # Destination Head
         n_d = self.down_projection_destination['nodes'](torch.cat((n, n_a), dim=-1))
@@ -775,10 +781,6 @@ class PolicyHead(nn.Module):
         del X
         cargo_logits = self.ptr_cargo(c_c, p_c, mask=cargo_mask, add_choice=True)
         cargo = self.sample(cargo_logits)
-
-        action_logits = nn.Softmax(dim=-1)(action_logits)
-        destination_logits = nn.Softmax(dim=-1)(destination_logits)
-        cargo_logits = nn.Softmax(dim=-1)(cargo_logits)
 
         return {
             'actions': actions,
@@ -1088,12 +1090,17 @@ class Ptr(nn.Module):
                 (ptr_mtx, torch.zeros(ptr_mtx.size(0), ptr_mtx.size(1), 1)), dim=-1)
 
         if mask is not None:
-            ptr_mtx = ptr_mtx + mask
+            
+            if self.config['softmax']:
+                ptr_mtx_sm = F.softmax(ptr_mtx + mask, dim=-1)
+                mask = torch.all(mask == -float('inf'), dim=-1)
+                ptr_mtx = torch.where(~mask.unsqueeze(-1), ptr_mtx_sm, torch.zeros_like(ptr_mtx_sm))
+            else:
+                ptr_mtx = ptr_mtx.masked_fill(~mask.unsqueeze(-1), -float('inf'))
 
-        # softmax
-        if self.config['softmax']:
+        elif self.config['softmax']:
             ptr_mtx = F.softmax(ptr_mtx, dim=-1)
-
+        
         return ptr_mtx
 
 
