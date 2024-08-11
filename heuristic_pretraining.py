@@ -251,22 +251,28 @@ def stack_nested_dicts(dict_list):
 def calculate_batch_loss(pi, criterion, x_batch, target_batch):
     y_batch = pi(x_batch)
     
+    # Action Loss
     action_loss = criterion(y_batch['action_logits'].view(-1, 3), target_batch['actions'].view(-1, 3))
-    
-    # Mask for destination and cargo actions
-    dest_mask = (target_batch['actions'][:, :, 0] == 1).view(-1)
-    cargo_mask = (target_batch['actions'][:, :, 1] == 1)
-    cargo_mask_new = []
-    for i in range(cargo_mask.shape[0]):
-        for j in range(y_batch['cargo'].shape[1]):
-            cargo_mask_new.append([cargo_mask[i].tolist() + [1]])
-    cargo_mask = torch.tensor(cargo_mask_new).view(-1, x_batch['agents']['tensor'].shape[1] + 1)
 
-    destination_loss = criterion(y_batch['destination_logits'].view(-1, x_batch['nodes']['PyGeom'][0].x.shape[0])[dest_mask], 
-                                 target_batch['destinations'].view(-1, x_batch['nodes']['PyGeom'][0].x.shape[0])[dest_mask])
-    cargo_loss = criterion(y_batch['cargo_logits'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask], 
-                           target_batch['cargo'].view(-1, x_batch['agents']['tensor'].shape[1] + 1)[cargo_mask])
+    # Destination Loss
+    dest_mask = (target_batch['actions'][:, :, 0] == 1).float().unsqueeze(-1)\
+        .expand(-1, -1, x_batch['nodes']['PyGeom'][0].x.shape[0])
+    destination_loss = criterion(
+        torch.nan_to_num(y_batch['destination_logits'], nan=0)*dest_mask,
+        target_batch['destinations']*dest_mask
+    )
     
+    # Cargo Loss
+    cargo_mask = (target_batch['actions'][:, :, 1] == 1).float()
+    cargo_mask = torch.tensor([y+[1] for y in cargo_mask.tolist()])
+    cargo_mask = cargo_mask.unsqueeze(-1).expand(-1, -1, y_batch['cargo'].shape[1])
+    cargo_mask = cargo_mask.permute(0, 2, 1)
+
+    cargo_loss = criterion(
+        torch.nan_to_num(y_batch['cargo_logits'], nan=0)*cargo_mask,
+        target_batch['cargo']*cargo_mask
+    )
+
     total_loss = action_loss + destination_loss + cargo_loss
     return total_loss
 
@@ -369,7 +375,7 @@ def main():
     """
 
     seed = 0
-    lr = 0.0001
+    lr = 0.00000000000000001
     num_envs = 4
 
     h = [HeuristicSolution() for _ in range(num_envs)]
