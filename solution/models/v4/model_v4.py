@@ -684,20 +684,30 @@ class PolicyHead(nn.Module):
         Returns: tensor (p x n) one-hot encoded samples
         """
         non_zero_mask = logits.abs().sum(dim=2, keepdim=True) != 0
-        sampled = F.gumbel_softmax(logits, tau=1.0, hard=True, dim=2).detach()
-        return torch.where(non_zero_mask, sampled, torch.zeros_like(logits))
+
+        batch_size, num_distributions, num_categories = logits.shape
+        reshaped_probs = logits.view(-1, num_categories)
+        reshaped_probs = torch.where(non_zero_mask.view(-1, 1), reshaped_probs, torch.ones_like(reshaped_probs))
+        sampled = torch.multinomial(reshaped_probs, num_samples=1)
+        sampled = sampled.view(batch_size, num_distributions, 1)
+        output = torch.zeros_like(logits)
+        for i in range(batch_size):
+            for j in range(num_distributions):
+                output[i, j] = F.one_hot(sampled[i, j], num_classes=num_categories).float()
+        output = torch.where(non_zero_mask, output, torch.zeros_like(logits))
+        return output
 
     def update_masks(self, actions, destination_mask, cargo_mask):
 
         actions = actions.argmax(dim=-1)
 
         # Update Destination Mask
-        destination_action_mask = torch.where(actions == DESTINATION_ACTION, torch.tensor(float('-inf')), torch.tensor(float(0)))
+        destination_action_mask = torch.where(actions == DESTINATION_ACTION, torch.tensor(float(0)), torch.tensor(float('-inf')))
         destination_action_mask = destination_action_mask.unsqueeze(-1).expand(-1, -1, destination_mask.shape[-1])
         destination_mask = destination_mask + destination_action_mask
 
         # Update Cargo Mask
-        cargo_action_mask = torch.where(actions == LOAD_UNLOAD_ACTION, torch.tensor(float('-inf')), torch.tensor(float(0)))
+        cargo_action_mask = torch.where(actions == LOAD_UNLOAD_ACTION, torch.tensor(float(0)), torch.tensor(float('-inf')))
         cargo_action_mask = torch.tensor([y+[0] for y in cargo_action_mask.tolist()])
         cargo_action_mask = cargo_action_mask.unsqueeze(-1).expand(-1, -1, cargo_mask.shape[1])
         cargo_action_mask = cargo_action_mask.permute(0, 2, 1)
@@ -743,8 +753,6 @@ class PolicyHead(nn.Module):
         # Update Masks
         destination_mask, cargo_mask = self.update_masks(
             actions, destination_mask, cargo_mask)
-        print(destination_mask)
-        print(cargo_mask)
             
         # Destination Head
         n_d = self.down_projection_destination['nodes'](torch.cat((n, n_a), dim=-1))
