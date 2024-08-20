@@ -128,6 +128,7 @@ class Encoder(nn.Module):
         try:
             assert x['agents']['tensor'].shape[2] == self.config['agents']['in_dim'], 'agents tensor has incorrect shape'
         except:
+            print('Agents tensor has incorrect shape')
             print(x['agents']['tensor'].shape)
             print(self.config['agents']['in_dim'])
         assert x['cargo']['tensor'].shape[2] == self.config['cargo']['in_dim'], 'cargo tensor has incorrect shape'
@@ -140,15 +141,14 @@ class Encoder(nn.Module):
         # Embed Nodes
         node_embeddings_GAT = []
         if isinstance(node_embeddings[0], list):
+            print("Node Embeddings should not be a list")
             print(node_embeddings)
         for i in range(len(node_embeddings)):
             node_mtx, edge_index, edge_attr =\
                 node_embeddings[i].x, node_embeddings[i].edge_index,\
                     node_embeddings[i].edge_attr
             node_mtx = self.up_projection_n(node_mtx)
-            if torch.isnan(node_mtx[0][0]).item():
-                print(x)
-                print(self.up_projection_n)
+            assert not torch.isnan(node_mtx[0][0]).item(), 'NaN in node embeddings probably due to NaN in layers'
             for layer in self.GAT:
                 node_mtx = layer(node_mtx, edge_index, edge_attr)
             node_embeddings_GAT.append(node_mtx)
@@ -163,7 +163,7 @@ class Encoder(nn.Module):
         cargo_embeddings = self.up_projection_c(cargo_embeddings)
         for layer in self.cargo_transformer:
             cargo_embeddings = layer(cargo_embeddings)
-        
+
         return {
             'cargo_embeddings': cargo_embeddings,
             'plane_embeddings': plane_embeddings,
@@ -588,7 +588,7 @@ class PolicyHead(nn.Module):
         self.ptr_destination = Ptr({
             'embed_dim': config['agents_in_dim'],
             'hidden_dim': config['agents_in_dim'],
-            'softmax': True
+            'softmax': False #TODO: change this back is your experiment doesnt work
         })
 
         # Cargo Head
@@ -672,7 +672,7 @@ class PolicyHead(nn.Module):
         self.ptr_cargo = Ptr({
             'embed_dim': config['agents_in_dim'],
             'hidden_dim': config['agents_in_dim'],
-            'softmax': True
+            'softmax': False #TODO: change this back is your experiment doesnt work
         })
 
 
@@ -746,9 +746,10 @@ class PolicyHead(nn.Module):
         del X
         action_logits = self.transformer_action(p_a)
         action_logits = self.down_projection_action(action_logits)
-        action_logits = action_logits + action_mask
+        action_logits_detached = action_logits.detach() + action_mask
+        action_logits_detached = nn.Softmax(dim=-1)(action_logits_detached)
         action_logits = nn.Softmax(dim=-1)(action_logits)
-        actions = self.sample(action_logits)
+        actions = self.sample(action_logits_detached)
 
         # Update Masks
         destination_mask, cargo_mask = self.update_masks(
@@ -767,8 +768,15 @@ class PolicyHead(nn.Module):
                 p_d = X['agents']
             if 'cargo' in X:
                 c_d = X['cargo']
-        destination_logits = self.ptr_destination(p_d, n_d, mask=destination_mask)
-        destinations = self.sample(destination_logits)
+        destination_logits = self.ptr_destination(p_d, n_d)#, mask=destination_mask)#TODO: change this back is your experiment doesnt work
+        destination_logits_detached = destination_logits.detach() + destination_mask
+        destination_logits_detached = nn.Softmax(dim=-1)(destination_logits_detached)
+        mask_bool = torch.all(destination_mask == -float('inf'), dim=-1)
+        destination_logits_detached = \
+            torch.where(~mask_bool.unsqueeze(-1), destination_logits_detached, 
+                        torch.zeros_like(destination_logits_detached))
+        destination_logits = nn.Softmax(dim=-1)(destination_logits)
+        destinations = self.sample(destination_logits_detached)
         del X
 
         # Cargo Head
@@ -787,8 +795,15 @@ class PolicyHead(nn.Module):
             if 'cargo' in X:
                 c_c = X['cargo']
         del X
-        cargo_logits = self.ptr_cargo(c_c, p_c, mask=cargo_mask, add_choice=True)
-        cargo = self.sample(cargo_logits)
+        cargo_logits = self.ptr_cargo(c_c, p_c, add_choice=True)#, mask=cargo_mask, add_choice=True)
+        cargo_logits_detached = cargo_logits.detach() + cargo_mask
+        cargo_logits_detached = nn.Softmax(dim=-1)(cargo_logits_detached)
+        mask_bool = torch.all(cargo_mask == -float('inf'), dim=-1)
+        cargo_logits_detached = \
+            torch.where(~mask_bool.unsqueeze(-1), cargo_logits_detached, 
+                        torch.zeros_like(cargo_logits_detached))
+        cargo_logits = nn.Softmax(dim=-1)(cargo_logits)
+        cargo = self.sample(cargo_logits_detached)
 
         return {
             'actions': actions,
