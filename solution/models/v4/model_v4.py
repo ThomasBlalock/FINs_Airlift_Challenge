@@ -795,7 +795,7 @@ class PolicyHead(nn.Module):
             if 'cargo' in X:
                 c_c = X['cargo']
         del X
-        cargo_logits = self.ptr_cargo(c_c, p_c, add_choice=True)#, mask=cargo_mask, add_choice=True)
+        cargo_logits = self.ptr_cargo(c_c, p_c, add_choice=True)#, mask=cargo_mask, add_choice=True) TODO
         cargo_logits_detached = cargo_logits.detach() + cargo_mask
         cargo_logits_detached = nn.Softmax(dim=-1)(cargo_logits_detached)
         mask_bool = torch.all(cargo_mask == -float('inf'), dim=-1)

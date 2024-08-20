@@ -347,9 +347,12 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                         h[env_id].reset(ob)
                 
                 obs[env_id] = ob
+            #TODO: Fix the dimention mis-match when the number of cargo doesn't match
             x_batch = stack_nested_dicts(x_batch)
             y_batch = stack_nested_dicts(y_batch)
-            total_loss = calculate_batch_loss(pi, criterion, x_batch, y_batch)
+            total_loss = 0
+            for x_batch, y_batch in zip(x_batch, y_batch):
+                total_loss += calculate_batch_loss(pi, criterion, x_batch, y_batch)
 
             # Backward Pass
             optim.zero_grad()
