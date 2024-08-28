@@ -255,18 +255,18 @@ def calculate_batch_loss(pi, criterion, x_batch, target_batch):
     action_loss = criterion(y_batch['action_logits'].view(-1, 3), target_batch['actions'].view(-1, 3))
 
     # Destination Loss
-    dest_mask = (target_batch['actions'][:, :, 0] == 1).float().unsqueeze(-1)\
-        .expand(-1, -1, x_batch['nodes']['PyGeom'][0].x.shape[0])
+    dest_mask = (target_batch['actions'][:, 0] == 1).float().unsqueeze(-1)\
+        .expand(-1, x_batch['nodes']['PyGeom'][0].x.shape[0]).unsqueeze(0)
     destination_loss = criterion(
         torch.nan_to_num(y_batch['destination_logits'], nan=0)*dest_mask,
         target_batch['destinations']*dest_mask
     )
     
     # Cargo Loss
-    cargo_mask = (target_batch['actions'][:, :, 1] == 1).float()
-    cargo_mask = torch.tensor([y+[1] for y in cargo_mask.tolist()])
-    cargo_mask = cargo_mask.unsqueeze(-1).expand(-1, -1, y_batch['cargo'].shape[1])
-    cargo_mask = cargo_mask.permute(0, 2, 1)
+    cargo_mask = (target_batch['actions'][:, 1] == 1).float()
+    cargo_mask = torch.tensor(cargo_mask.tolist()+[1]).float()\
+        .unsqueeze(-1).expand(-1, y_batch['cargo'].shape[1]).unsqueeze(0)\
+            .permute(0, 2, 1)
 
     cargo_loss = criterion(
         torch.nan_to_num(y_batch['cargo_logits'], nan=0)*cargo_mask,
@@ -347,12 +347,9 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                         h[env_id].reset(ob)
                 
                 obs[env_id] = ob
-            #TODO: Fix the dimention mis-match when the number of cargo doesn't match
-            x_batch = stack_nested_dicts(x_batch)
-            y_batch = stack_nested_dicts(y_batch)
             total_loss = 0
-            for x_batch, y_batch in zip(x_batch, y_batch):
-                total_loss += calculate_batch_loss(pi, criterion, x_batch, y_batch)
+            for x_sample, y_sample in zip(x_batch, y_batch):
+                total_loss += calculate_batch_loss(pi, criterion, x_sample, y_sample)
 
             # Backward Pass
             optim.zero_grad()
@@ -361,7 +358,7 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
             optim.step()
         
             epoch_loss += total_loss.item()
-            print(f"Batch Loss: {total_loss.item()}")
+            # print(f"Batch Loss: {total_loss.item()}")
         
         avg_epoch_loss = epoch_loss / num_batches
         print(f"Epoch {epoch+1} Average Loss: {avg_epoch_loss}")
@@ -378,7 +375,7 @@ def main():
     """
 
     seed = 0
-    lr = 0.00000000000000001
+    lr = 0.0001
     num_envs = 4
 
     h = [HeuristicSolution() for _ in range(num_envs)]
@@ -388,7 +385,7 @@ def main():
     optim = torch.optim.Adam(pi.parameters(), lr=lr)
 
     # Pretrain the policy model
-    heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per_minibatch=32, num_envs=num_envs, seed=seed)
+    heuristic_pretraining(pi, h, optim, epochs=20, num_batches=32, timesteps_per_minibatch=32, num_envs=num_envs, seed=seed)
 
 
 main()

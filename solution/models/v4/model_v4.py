@@ -702,18 +702,33 @@ class PolicyHead(nn.Module):
         actions = actions.argmax(dim=-1)
 
         # Update Destination Mask
-        destination_action_mask = torch.where(actions == DESTINATION_ACTION, torch.tensor(float(0)), torch.tensor(float('-inf')))
+        destination_action_mask = torch.where(actions == DESTINATION_ACTION, torch.tensor(float(1)), torch.tensor(float(0)))
         destination_action_mask = destination_action_mask.unsqueeze(-1).expand(-1, -1, destination_mask.shape[-1])
-        destination_mask = destination_mask + destination_action_mask
+        destination_mask = destination_mask * destination_action_mask
 
         # Update Cargo Mask
-        cargo_action_mask = torch.where(actions == LOAD_UNLOAD_ACTION, torch.tensor(float(0)), torch.tensor(float('-inf')))
-        cargo_action_mask = torch.tensor([y+[0] for y in cargo_action_mask.tolist()])
+        cargo_action_mask = torch.where(actions == LOAD_UNLOAD_ACTION, torch.tensor(float(1)), torch.tensor(float(0)))
+        cargo_action_mask = torch.tensor([y+[1] for y in cargo_action_mask.tolist()])
         cargo_action_mask = cargo_action_mask.unsqueeze(-1).expand(-1, -1, cargo_mask.shape[1])
         cargo_action_mask = cargo_action_mask.permute(0, 2, 1)
-        cargo_mask = cargo_mask + cargo_action_mask
+        cargo_mask = cargo_mask * cargo_action_mask
 
         return destination_mask, cargo_mask
+
+    def normalize(self, logits):
+        """
+        Args:
+            logits: tensor (b x p x n) probabilities
+
+        Returns: tensor (b x p x n) normalized probabilities
+        """
+
+        mask = logits.sum(dim=-1) != 0
+        norm_logits = logits / logits.sum(dim=-1, keepdim=True)
+        norm_logits = torch.where(mask.unsqueeze(-1), norm_logits, torch.zeros_like(logits))
+        assert not torch.isnan(norm_logits).any() and not torch.isinf(norm_logits).any(), 'NaN or Inf in normalized logits'
+
+        return logits
 
     def forward(self, n, p, c, action_mask=None, destination_mask=None, cargo_mask=None):
         """
@@ -746,10 +761,10 @@ class PolicyHead(nn.Module):
         del X
         action_logits = self.transformer_action(p_a)
         action_logits = self.down_projection_action(action_logits)
-        action_logits_detached = action_logits.detach() + action_mask
-        action_logits_detached = nn.Softmax(dim=-1)(action_logits_detached)
         action_logits = nn.Softmax(dim=-1)(action_logits)
-        actions = self.sample(action_logits_detached)
+        action_logits = action_logits * action_mask
+        action_logits = action_logits / action_logits.sum(dim=-1, keepdim=True)
+        actions = self.sample(action_logits)
 
         # Update Masks
         destination_mask, cargo_mask = self.update_masks(
@@ -768,15 +783,11 @@ class PolicyHead(nn.Module):
                 p_d = X['agents']
             if 'cargo' in X:
                 c_d = X['cargo']
-        destination_logits = self.ptr_destination(p_d, n_d)#, mask=destination_mask)#TODO: change this back is your experiment doesnt work
-        destination_logits_detached = destination_logits.detach() + destination_mask
-        destination_logits_detached = nn.Softmax(dim=-1)(destination_logits_detached)
-        mask_bool = torch.all(destination_mask == -float('inf'), dim=-1)
-        destination_logits_detached = \
-            torch.where(~mask_bool.unsqueeze(-1), destination_logits_detached, 
-                        torch.zeros_like(destination_logits_detached))
+        destination_logits = self.ptr_destination(p_d, n_d)
         destination_logits = nn.Softmax(dim=-1)(destination_logits)
-        destinations = self.sample(destination_logits_detached)
+        destination_logits = destination_logits * destination_mask
+        destination_logits = self.normalize(destination_logits)
+        destinations = self.sample(destination_logits)
         del X
 
         # Cargo Head
@@ -795,15 +806,11 @@ class PolicyHead(nn.Module):
             if 'cargo' in X:
                 c_c = X['cargo']
         del X
-        cargo_logits = self.ptr_cargo(c_c, p_c, add_choice=True)#, mask=cargo_mask, add_choice=True) TODO
-        cargo_logits_detached = cargo_logits.detach() + cargo_mask
-        cargo_logits_detached = nn.Softmax(dim=-1)(cargo_logits_detached)
-        mask_bool = torch.all(cargo_mask == -float('inf'), dim=-1)
-        cargo_logits_detached = \
-            torch.where(~mask_bool.unsqueeze(-1), cargo_logits_detached, 
-                        torch.zeros_like(cargo_logits_detached))
+        cargo_logits = self.ptr_cargo(c_c, p_c, add_choice=True)
         cargo_logits = nn.Softmax(dim=-1)(cargo_logits)
-        cargo = self.sample(cargo_logits_detached)
+        cargo_logits = cargo_logits * cargo_mask
+        cargo_logits = self.normalize(cargo_logits)
+        cargo = self.sample(cargo_logits)
 
         return {
             'actions': actions,

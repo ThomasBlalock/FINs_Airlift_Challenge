@@ -157,19 +157,19 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
 
         # Action Mask
         if airplane.state != READY_FOR_TAKEOFF:
-            action_mask.append([-float('inf'), -float('inf'), 0])
+            action_mask.append([0, 0, 1])
         elif airplane.cargo_at_current_airport == [] and airplane.cargo == {}:
             # If there is no cargo at the airport and no cargo on the plane, mask unload/load option
-            action_mask.append([0, -float('inf'), 0])
+            action_mask.append([1, 0, 1])
         else:
-            action_mask.append([0, 0, 0])
+            action_mask.append([1, 1, 1])
             
 
         # Agents Mask
         if airplane.state == READY_FOR_TAKEOFF: # 1-based indexing
-            agents_mask.append([0 if (i+1) in airplane.available_routes else -float('inf') for i in range(len(airport_list))])
+            agents_mask.append([1 if (i+1) in airplane.available_routes else 0 for i in range(len(airport_list))])
         else:
-            agents_mask.append([0 if (i+1) == airplane.location else -float('inf') for i in range(len(airport_list))])
+            agents_mask.append([1 if (i+1) == airplane.location else 0 for i in range(len(airport_list))])
 
     agents_tensor = torch.tensor(agents_tensor, dtype=torch.float32)
     agents_mask = torch.tensor(agents_mask, dtype=torch.float32)
@@ -205,11 +205,11 @@ def format_obs(obs, t, max_airport_capacity=5e+09, max_weight=10000, max_time=10
         # Cargo Mask
         if t < cargo.earliest_pickup_time:
             if cargo.on_a_plane == 1:
-                cargo_mask.append([1 if airplane_list.airplanes[a]==cargo.location else -float('inf') for a in agents_map] + [1])
+                cargo_mask.append([1 if airplane_list.airplanes[a]==cargo.location else 0 for a in agents_map] + [1])
             else:
-                cargo_mask.append([1 if airplane_list.airplanes[a].location==cargo.location else -float('inf') for a in agents_map] + [1])
+                cargo_mask.append([1 if airplane_list.airplanes[a].location==cargo.location else 0 for a in agents_map] + [1])
         else:
-            cargo_mask.append([-float('inf') for _ in range(len(agents_map))] + [1])
+            cargo_mask.append([0 for _ in range(len(agents_map))] + [1])
     
     cargo_tensor = torch.tensor(cargo_tensor, dtype=torch.float32)
     cargo_mask = torch.tensor(cargo_mask, dtype=torch.float32)
