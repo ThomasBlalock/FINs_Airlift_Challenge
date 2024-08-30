@@ -27,7 +27,7 @@ def count_parameters(model):
 
 class Encoder(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, gpu=None):
         """
         config: { 
             nodes: {
@@ -47,6 +47,11 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.config = config
         self.nl = nn.LeakyReLU(0.2) #nl = non-linearity
+
+
+        self.gpu = None
+        if gpu is not None:
+            self.gpu = gpu
 
         # Up-Projections
         self.up_projection_n = nn.Sequential(
@@ -72,7 +77,7 @@ class Encoder(nn.Module):
                 'num_heads': 4,
                 'ff_expansion_factor': 2,
                 'non_linearity': self.nl,
-            }) for _ in range(3)]
+            }, self.gpu) for _ in range(3)]
         )
 
         # Plane Transformer
@@ -94,6 +99,14 @@ class Encoder(nn.Module):
                 'non_linearity': self.nl,
             }) for _ in range(3)]
         )
+
+        if self.gpu:
+            self.up_projection_n = self.up_projection_n.to(self.gpu)
+            self.up_projection_a = self.up_projection_a.to(self.gpu)
+            self.up_projection_c = self.up_projection_c.to(self.gpu)
+            self.GAT = self.GAT.to(self.gpu)
+            self.plane_transformer = self.plane_transformer.to(self.gpu)
+            self.cargo_transformer = self.cargo_transformer.to(self.gpu)
 
 
     def forward(self, x):
@@ -147,6 +160,11 @@ class Encoder(nn.Module):
             node_mtx, edge_index, edge_attr =\
                 node_embeddings[i].x, node_embeddings[i].edge_index,\
                     node_embeddings[i].edge_attr
+            if self.gpu:
+                node_mtx = node_mtx.to(self.gpu)
+                edge_index = edge_index.to(self.gpu)
+                edge_attr = edge_attr.to(self.gpu)
+                
             node_mtx = self.up_projection_n(node_mtx)
             assert not torch.isnan(node_mtx[0][0]).item(), 'NaN in node embeddings probably due to NaN in layers'
             for layer in self.GAT:
@@ -824,8 +842,13 @@ class PolicyHead(nn.Module):
 
 class Policy(nn.Module):
 
-    def __init__(self):
+    def __init__(self, gpu=None):
         super(Policy, self).__init__()
+
+        self.gpu = None
+        if gpu is not None:
+            self.gpu = gpu
+
         self.encoder = Encoder({
             'nodes': {
                 'in_dim': 3,
@@ -839,7 +862,8 @@ class Policy(nn.Module):
                 'in_dim': 11,
                 'out_dim': 32,
             }
-        })
+        }, self.gpu)
+
         self.head = PolicyHead({
             'nodes_in_dim': 32,
             'agents_in_dim': 32,
@@ -860,7 +884,6 @@ class Policy(nn.Module):
             cargo_logits: tensor (p x n) log probabilities
         }
         """
-
         embeddings = self.encoder(x)
         return self.head(embeddings['node_embeddings'], embeddings['plane_embeddings'], embeddings['cargo_embeddings'],
                          action_mask=x['agents']['action_mask'], destination_mask=x['agents']['destination_mask'], cargo_mask=x['cargo']['mask'])
@@ -1183,7 +1206,7 @@ class TransformerLayer(nn.Module):
 
 class GATTransformerLayer(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, gpu=None):
         """
         config: {
             'embed_dim': int, dimension of the embeddings
@@ -1209,8 +1232,16 @@ class GATTransformerLayer(nn.Module):
         self.norm1 = nn.LayerNorm(config['embed_dim'])
         self.norm2 = nn.LayerNorm(config['embed_dim'])
 
-    def forward(self, x, edge_index, edge_attr):
+        if gpu:
+            self.GAT = self.GAT.to(gpu)
+            self.down_projection = self.down_projection.to(gpu)
+            self.ff = self.ff.to(gpu)
+            self.norm1 = self.norm1.to(gpu)
+            self.norm2 = self.norm2.to(gpu)
 
+    def forward(self, x, edge_index, edge_attr):
+        import os
+        print(os.environ['PYTORCH_ENABLE_MPS_FALLBACK'])
         v = self.GAT(x, edge_index, edge_attr=edge_attr)
         v = self.down_projection(v)
         v = self.norm1(v + x)

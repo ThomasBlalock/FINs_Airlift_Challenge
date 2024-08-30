@@ -1,4 +1,5 @@
 # Imports
+import os
 
 # Environment
 from airlift.envs.airlift_env import AirliftEnv
@@ -15,6 +16,7 @@ from airlift.envs.generators.cargo_generators import StaticCargoGenerator
 # Dynamic events
 from airlift.envs.events.event_interval_generator import EventIntervalGenerator
 from airlift.envs.generators.cargo_generators import DynamicCargoGenerator
+import argparse
 
 # Solutiona
 from solution.mysolution import MySolution
@@ -278,7 +280,7 @@ def calculate_batch_loss(pi, criterion, x_batch, target_batch):
 
 
 
-def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per_minibatch=32, num_envs=4, seed=0):
+def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per_minibatch=32, num_envs=4, seed=0, gpu=None):
     """
     This function is responsible for pretraining the agent using a heuristic solution.
     It adds a scaled loss each timestep and backpropagates at regular intervals.
@@ -325,6 +327,8 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                     
                     # Forward Pass & Get Labels
                     x = format_obs(ob, t, prev_x=xs[env_id])
+                    if gpu is not None:
+                        x = struct_to_gpu(x, gpu)
                     xs[env_id] = x
                     y = pi(x)
                     for p in range(x['agents']['tensor'].shape[0]):
@@ -368,6 +372,14 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
         pth = 'solution/models/v4/v4_epoch-'+str(epoch)+'_pi.pth'
         torch.save(pi.state_dict(), pth)
                 
+def struct_to_gpu(d, device):
+    if isinstance(d, dict):
+        return {k: struct_to_gpu(v, device) for k, v in d.items()}
+    elif isinstance(d, list):
+        return [struct_to_gpu(e, device) for e in d]
+    elif torch.is_tensor(d):
+        return d.to(device)
+    return d
 
 def main():
     """
@@ -378,14 +390,25 @@ def main():
     lr = 0.0001
     num_envs = 4
 
+    parser = argparse.ArgumentParser()
+    # Add a flag --gpu
+    parser.add_argument("--gpu", type=str)
+
+    # Parse the arguments
+    args = parser.parse_args()
+
     h = [HeuristicSolution() for _ in range(num_envs)]
 
+
     # Load the policy model
-    pi = Policy()
+    pi = Policy(args.gpu)
+    if args.gpu is not None:
+        pi = pi.to(args.gpu)
+
     optim = torch.optim.Adam(pi.parameters(), lr=lr)
 
     # Pretrain the policy model
-    heuristic_pretraining(pi, h, optim, epochs=20, num_batches=32, timesteps_per_minibatch=32, num_envs=num_envs, seed=seed)
+    heuristic_pretraining(pi, h, optim, epochs=20, num_batches=32, timesteps_per_minibatch=32, num_envs=num_envs, seed=seed, gpu=args.gpu)
 
 
 main()
