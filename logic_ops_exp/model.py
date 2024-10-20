@@ -64,12 +64,6 @@ class LogicModelMA(nn.Module):
                 in_set=self.embed_in_set,
                 config=MA_config
             ))
-        # MA_config['prop']['output'] = False
-        # MA_config['op']['output'] = False
-        # self.MA_list.append(MixingAttention(
-        #     in_set=self.embed_in_set,
-        #     config=MA_config
-        # ))
 
         # Down-project to 3
         self.dp = nn.Linear(embed_dim, 3)
@@ -97,8 +91,6 @@ class LogicModelMA(nn.Module):
 
         # MA Layers
         for MA in self.MA_list:
-            # print keys in X
-            print(X.keys())
             X = MA(X)
 
         # down-project to 3
@@ -281,8 +273,7 @@ class MixingAttention(FlexibleInputNetwork):
             self.LN_out[input_key] = nn.LayerNorm(in_set[input_key])
 
     def forward(self, X):
-        print(self.input_keys)
-
+        
         # Z_i = LN(||_j=1->n(MHA(X_i, X_j, X_j)))
         Z = {}
 
