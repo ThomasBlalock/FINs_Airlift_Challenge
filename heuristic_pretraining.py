@@ -341,7 +341,13 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
                     ob, _, dones, _ = env.step(actions=actions)
 
                     # If done, get new environment
-                    if all(dones.values()):
+                    done = True
+                    for _, d in dones.items():
+                        if not d:
+                            done = False
+                            break
+                    if done:
+                    #if all(dones.values()):
                         envs[env_id] = scheduler.next(epoch)
                         ob = envs[env_id].reset(seed=seed)
                         h[env_id].reset(ob)
@@ -362,7 +368,6 @@ def heuristic_pretraining(pi, h, optim, epochs=10, num_batches=32, timesteps_per
         
         avg_epoch_loss = epoch_loss / num_batches
         print(f"Epoch {epoch+1} Average Loss: {avg_epoch_loss}")
-        scheduler.step(avg_epoch_loss)
         
         # Save the model for each epoch
         pth = 'solution/models/v4/v4_epoch-'+str(epoch)+'_pi.pth'
@@ -375,7 +380,7 @@ def main():
     """
 
     seed = 0
-    lr = 0.0001
+    lr = 0.001
     num_envs = 4
 
     h = [HeuristicSolution() for _ in range(num_envs)]
@@ -385,7 +390,7 @@ def main():
     optim = torch.optim.Adam(pi.parameters(), lr=lr)
 
     # Pretrain the policy model
-    heuristic_pretraining(pi, h, optim, epochs=20, num_batches=32, timesteps_per_minibatch=32, num_envs=num_envs, seed=seed)
+    heuristic_pretraining(pi, h, optim, epochs=20, num_batches=64, timesteps_per_minibatch=64, num_envs=num_envs, seed=seed)
 
 
 main()
