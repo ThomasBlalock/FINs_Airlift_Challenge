@@ -17,7 +17,7 @@ We introduce Flexible Input Networks (FINs), a new class of neural architectures
 
 ## The Airlift Challenge
 ![Environment Rendering](images/env.png)<br>
-The Airlift Challenge is a benchmark created by the Air Force Research Laboratory (AFRL) to prompt innovation in deep reinforcement learning applications to airlift logistics problems. It simulates airlift logistics with a dynamically generated map and randomized perturbations and constraints that would occur in the real world. You can learn more about the Airlift Challenge at their [Ibsite](https://airliftchallenge.com/chapters/main.html).
+The Airlift Challenge is a benchmark created by the Air Force Research Laboratory (AFRL) to prompt innovation in deep reinforcement learning applications to airlift logistics problems. It simulates airlift logistics with a dynamically generated map and randomized perturbations and constraints that would occur in the real world. You can learn more about the Airlift Challenge at their [website](https://airliftchallenge.com/chapters/main.html).
 
 ## Flexible Inpute Network (FIN)
 FINs are a class of neural architectures. FINs are greatly useful for combinatorial problems like PDPs and the Airlift Challenge where a model must reason across a set of sets. In this project, I invented two type of FINs: Mixing Attention and Self Projection.<br>
