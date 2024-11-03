@@ -15,14 +15,15 @@ In this project, we introduce a novel class of neural architectures designed to 
 We introduce Flexible Input Networks (FINs), a new class of neural architectures designed to process a set of dynamically sized inputs (set of sets) without pre-decoder aggregations, recurrence, or autoregression. Problems where the input or output is a set of sets, such as certain Pickup and Delivery Problems (PDPs) or multi-agent reinforcement learning problems (MARLs), cannot be trivially addressed with current mechanisms. Rather, current approaches require iterative processing, which coordinates actions in a solution space suboptimally. This paper addresses this problem by formulating a class of neural architectures that can reason about the global context while maintaining a separate embedding for each object of each input set. This paper applies FINs to the Airlift Challenge, which is an instance of the Pickup and Delivery Problem (PDP). Using FINs, this paper designs the first multi-agent reinforcement learning (MARL) system to process a set of sets (a graph, a set of airplanes, and a set of cargo orders) into a set of actions for each agent without any pre-decoder aggregation, recurrence, or autoregression. Two FIN variants are presented: Self-Projection (SP) and Mixing Attention (MA), each offering unique advantages.
 
 ## The Airlift Challenge
+![Environment Rendering](images/env.png)<br>
 The Airlift Challenge is a benchmark created by the Air Force Research Laboratory (AFRL) to prompt innovation in deep reinforcement learning applications to airlift logistics problems. It simulates airlift logistics with a dynamically generated map and randomized perturbations and constraints that would occur in the real world. You can learn more about the Airlift Challenge at their [website](https://airliftchallenge.com/chapters/main.html).
 
 ## Flexible Inpute Network (FIN)
-FINs are a class of neural architectures. FINs are greatly useful for combinatorial problems like PDPs and the Airlift Challenge where a model must reason across a set of sets. In this project, we invented two type of FINs: Mixing Attention and Self Projection.
-*Mixing Attention:*
-![Mixing Attention Architecture Diagram](images/ma.png)
-*Self-Projection:*
-![Self-Projection Architecture Diagram](images/sp.png)
+FINs are a class of neural architectures. FINs are greatly useful for combinatorial problems like PDPs and the Airlift Challenge where a model must reason across a set of sets. In this project, we invented two type of FINs: Mixing Attention and Self Projection.<br>
+*Mixing Attention:*<br>
+![Mixing Attention Architecture Diagram](images/ma.png)<br>
+*Self-Projection:*<br>
+![Self-Projection Architecture Diagram](images/sp.png)<br>
 
 ## Reinforcement Learning Algorithm
 This project uses proximal policy optimization (PPO), which is an on-policy reinforcement learning algorithm. It is an actor-critic architecture requiring a model to output actions and a model to help calculate the advantage value Learn more about PPO at this [article](https://arxiv.org/abs/1707.06347).
