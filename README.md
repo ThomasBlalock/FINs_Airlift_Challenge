@@ -1,9 +1,10 @@
 # Flexible Input Networks: Set of Sets Neural Architectures Applied to the Airlift Challenge
 By: Thomas Blalock<br>
-Date: September 27, 2024
+Date: September 27, 2024<br>
+Contributor: Luke Kenworthy
 
 ## Summary
-In this project, I introduce a novel class of neural architectures designed to handle a set of dynamically sized inputs (set of sets) without pre-decoder aggregations, recurrence, or autoregression. This project applies FINs to the Airlift Challenge, a complex Pickup and Delivery Problem (PDP) instance formulated by the Air Force Research Laboratory. This project is in-progress and is up-to-date as of September 27, 2024. For a concise summary, reference a 5 minute video poster presentation [here](https://drive.google.com/file/d/1cr0xx7AcpoGLJWMsXrsaG_P0eAAwiG68/view?usp=sharing).
+In this project, we introduce a novel class of neural architectures designed to handle a set of dynamically sized inputs (set of sets) without pre-decoder aggregations, recurrence, or autoregression. This project applies FINs to the Airlift Challenge, a complex Pickup and Delivery Problem (PDP) instance formulated by the Air Force Research Laboratory. This project is in-progress and is up-to-date as of September 27, 2024. For a concise summary, reference a 5 minute video poster presentation [here](https://drive.google.com/file/d/1cr0xx7AcpoGLJWMsXrsaG_P0eAAwiG68/view?usp=sharing).
 
 ## Table of Contents
 1. [QuickStart](#quickstart)
@@ -12,7 +13,7 @@ In this project, I introduce a novel class of neural architectures designed to h
 4. [Methodology](#methodology)
 
 ## Introduction
-I introduce Flexible Input Networks (FINs), a new class of neural architectures designed to process a set of dynamically sized inputs (set of sets) without pre-decoder aggregations, recurrence, or autoregression. Problems where the input or output is a set of sets, such as certain Pickup and Delivery Problems (PDPs) or multi-agent reinforcement learning problems (MARLs), cannot be trivially addressed with current mechanisms. Rather, current approaches require iterative processing, which coordinates actions in a solution space suboptimally. This paper addresses this problem by formulating a class of neural architectures that can reason about the global context while maintaining a separate embedding for each object of each input set. This paper applies FINs to the Airlift Challenge, which is an instance of the Pickup and Delivery Problem (PDP). Using FINs, this paper designs the first multi-agent reinforcement learning (MARL) system to process a set of sets (a graph, a set of airplanes, and a set of cargo orders) into a set of actions for each agent without any pre-decoder aggregation, recurrence, or autoregression. Two FIN variants are presented: Self-Projection (SP) and Mixing Attention (MA), each offering unique advantages.
+We introduce Flexible Input Networks (FINs), a new class of neural architectures designed to process a set of dynamically sized inputs (set of sets) without pre-decoder aggregations, recurrence, or autoregression. Problems where the input or output is a set of sets, such as certain Pickup and Delivery Problems (PDPs) or multi-agent reinforcement learning problems (MARLs), cannot be trivially addressed with current mechanisms. Rather, current approaches require iterative processing, which coordinates actions in a solution space suboptimally. This paper addresses this problem by formulating a class of neural architectures that can reason about the global context while maintaining a separate embedding for each object of each input set. This paper applies FINs to the Airlift Challenge, which is an instance of the Pickup and Delivery Problem (PDP). Using FINs, this paper designs the first multi-agent reinforcement learning (MARL) system to process a set of sets (a graph, a set of airplanes, and a set of cargo orders) into a set of actions for each agent without any pre-decoder aggregation, recurrence, or autoregression. Two FIN variants are presented: Self-Projection (SP) and Mixing Attention (MA), each offering unique advantages.
 
 ## The Airlift Challenge
 ![Environment Rendering](images/env.png)<br>
