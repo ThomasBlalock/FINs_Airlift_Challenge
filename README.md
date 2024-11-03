@@ -1,5 +1,5 @@
 # Flexible Input Networks: Set of Sets Neural Architectures Applied to the Airlift Challenge
-By: Thomas Blalock & Luke Kenworthy
+By: Thomas Blalock & Luke Kenworthy<br>
 Date: September 27, 2024
 
 ## Summary
