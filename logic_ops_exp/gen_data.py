@@ -75,7 +75,7 @@ def gen_data(i: int, key_size: int):
             row += prop_keys[exp[6]] # B
             goal_mtx.append(row)
             labels_mtx.append([1 if i==exp[0] else 0 for i in range(3)])
-            
+
     return {
         'prop_mtx': prop_mtx,
         'op_mtx': op_mtx,

@@ -95,7 +95,7 @@ class LogicModelMA(nn.Module):
 
         # down-project to 3
         Y = self.dp(X['goal'])
-        Y = F.softmax(Y, dim=-1)
+        # Y = F.softmax(Y, dim=-1) # Not needed for CrossEntropyLoss
 
         return Y            
 
