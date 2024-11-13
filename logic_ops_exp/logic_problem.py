@@ -92,6 +92,7 @@ class LogicProblem:
             outputs['labels'].append(problem['labels'])
         outputs['y'] = torch.cat(outputs['y'], dim=0)
         outputs['labels'] = torch.cat(outputs['labels'], dim=0)
+        # print(outputs['y'])
         loss = self.loss(outputs['y'], outputs['labels'])
         return loss
     

@@ -58,12 +58,43 @@ class LogicModelMA(nn.Module):
                 'FF_expansion_factor': 2
             }
         }
-        self.MA_list = nn.ModuleList([])
+        self.FIN_list = nn.ModuleList([])
         for _ in range(self.num_FIN_layers):
-            self.MA_list.append(MixingAttention(
+            self.FIN_list.append(MixingAttention(
                 in_set=self.embed_in_set,
                 config=MA_config
             ))
+
+        # self_pro_config = {
+        #     'non_linearity': nn.ReLU(),
+        #     'prop': {
+        #         'W_Z': (int)(embed_dim**0.5),
+        #         'd_ia': (int)(embed_dim/2),
+        #         'MLP_hidden_dim': (int)(embed_dim),
+        #         'FF_expansion_factor': 2,
+        #         'ouput': True
+        #     },
+        #     'op': {
+        #         'W_Z': (int)(embed_dim**0.5),
+        #         'd_ia': (int)(embed_dim/2),
+        #         'MLP_hidden_dim': (int)(embed_dim),
+        #         'FF_expansion_factor': 2,
+        #         'ouput': True
+        #     },
+        #     'goal': {
+        #         'W_Z': (int)(embed_dim**0.5),
+        #         'd_ia': (int)(embed_dim/2),
+        #         'MLP_hidden_dim': (int)(embed_dim),
+        #         'FF_expansion_factor': 2,
+        #         'ouput': True
+        #     }
+        # }
+        # self.FIN_list = nn.ModuleList([])
+        # for _ in range(self.num_FIN_layers):
+        #     self.FIN_list.append(MixingAttention(
+        #         in_set=self.embed_in_set,
+        #         config=self_pro_config
+        #     ))
 
         # Down-project to 3
         self.dp = nn.Linear(embed_dim, 3)
@@ -90,7 +121,7 @@ class LogicModelMA(nn.Module):
         }
 
         # MA Layers
-        for MA in self.MA_list:
+        for MA in self.FIN_list:
             X = MA(X)
 
         # down-project to 3
@@ -277,6 +308,7 @@ class MixingAttention(FlexibleInputNetwork):
         # Z_i = LN(||_j=1->n(MHA(X_i, X_j, X_j)))
         Z = {}
 
+        print("Initial: ", X)
         for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
@@ -287,19 +319,19 @@ class MixingAttention(FlexibleInputNetwork):
                     X[j].permute(1, 0, 2),
                     X[j].permute(1, 0, 2))[0]\
                     .permute(1, 0, 2) for j in self.input_keys], dim=-1))
-        
+        print("Z: ", Z)
         # A_i = relu(FF(Z_i)+Z_i)W0_i
         A = {}
         for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
             A[i] = torch.matmul(self.config['non_linearity'](self.FF_A[i](Z[i])+Z[i]), self.W0_A[i])
-        
+        print("A: ", A)
         # MA_i = relu(LN(X_i + A_i))
         Y = {}
         for i in self.input_keys:
             if not self.config[i]['output']:
                 continue
             Y[i] = self.config['non_linearity'](self.LN_out[i](X[i]+A[i]))
-        
+        print("Y: ", Y)
         return Y
